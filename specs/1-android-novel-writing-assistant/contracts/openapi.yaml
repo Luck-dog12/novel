@@ -1,0 +1,452 @@
+openapi: 3.0.0
+info:
+  title: 安卓小说写作助手 API
+  description: 安卓小说写作助手应用的后端API接口定义
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080/api
+    description: 本地开发环境
+  - url: https://api.novel-writing-assistant.com/api
+    description: 生产环境
+
+paths:
+  /v1/projects:
+    get:
+      summary: 获取写作项目列表
+      tags:
+        - 写作项目
+      responses:
+        '200':
+          description: 成功获取项目列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WritingProject'
+    post:
+      summary: 创建新的写作项目
+      tags:
+        - 写作项目
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WritingProjectCreate'
+      responses:
+        '201':
+          description: 项目创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WritingProject'
+
+  /v1/projects/{id}:
+    get:
+      summary: 获取写作项目详情
+      tags:
+        - 写作项目
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功获取项目详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WritingProject'
+    put:
+      summary: 更新写作项目
+      tags:
+        - 写作项目
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WritingProjectUpdate'
+      responses:
+        '200':
+          description: 项目更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WritingProject'
+    delete:
+      summary: 删除写作项目
+      tags:
+        - 写作项目
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 项目删除成功
+
+  /v1/documents:
+    post:
+      summary: 上传参考文档
+      tags:
+        - 参考文档
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                projectId:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: 文档上传成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferenceDocument'
+
+  /v1/documents/{id}:
+    get:
+      summary: 获取参考文档详情
+      tags:
+        - 参考文档
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功获取文档详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferenceDocument'
+    delete:
+      summary: 删除参考文档
+      tags:
+        - 参考文档
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 文档删除成功
+
+  /v1/generation:
+    post:
+      summary: 生成小说内容
+      tags:
+        - 内容生成
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerationRequest'
+      responses:
+        '200':
+          description: 生成成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationResponse'
+        '400':
+          description: 请求参数错误（例如续写缺少sessionId）
+          content:
+            text/plain:
+              schema:
+                type: string
+        '409':
+          description: 缺少可用于续写的上下文
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /v1/history:
+    get:
+      summary: 获取生成历史
+      tags:
+        - 生成历史
+      parameters:
+        - name: projectId
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功获取生成历史
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GenerationHistory'
+
+  /v1/context:
+    post:
+      summary: 保存上下文信息
+      tags:
+        - 上下文管理
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextInfoCreate'
+      responses:
+        '201':
+          description: 上下文保存成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextInfo'
+    get:
+      summary: 获取上下文信息
+      tags:
+        - 上下文管理
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功获取上下文信息
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ContextInfo'
+
+  /v1/sessions/latest:
+    get:
+      summary: 获取项目最新写作会话
+      tags:
+        - 会话管理
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功获取最新写作会话
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionInfo'
+        '404':
+          description: 会话不存在
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  schemas:
+    WritingProject:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        genreType:
+          type: string
+        creationDate:
+          type: string
+          format: date-time
+        lastModifiedDate:
+          type: string
+          format: date-time
+        status:
+          type: string
+        wordCount:
+          type: integer
+
+    WritingProjectCreate:
+      type: object
+      required:
+        - title
+        - genreType
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        genreType:
+          type: string
+
+    WritingProjectUpdate:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        genreType:
+          type: string
+        status:
+          type: string
+
+    ReferenceDocument:
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        fileName:
+          type: string
+        fileType:
+          type: string
+        fileSize:
+          type: integer
+        uploadDate:
+          type: string
+          format: date-time
+        filePath:
+          type: string
+
+    GenerationRequest:
+      type: object
+      required:
+        - projectId
+        - isContinueWriting
+      properties:
+        projectId:
+          type: string
+        isContinueWriting:
+          type: boolean
+        sessionId:
+          type: string
+        referenceFileId:
+          type: string
+        referenceDoc:
+          type: string
+        genreType:
+          type: string
+        writingDirection:
+          type: string
+
+    GenerationResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        sessionId:
+          type: string
+        generationType:
+          type: string
+        outputContent:
+          type: string
+        generationDate:
+          type: string
+          format: date-time
+        duration:
+          type: integer
+
+    GenerationHistory:
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        generationType:
+          type: string
+        inputParams:
+          type: object
+        outputContent:
+          type: string
+        generationDate:
+          type: string
+          format: date-time
+        duration:
+          type: integer
+
+    ContextInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        sessionId:
+          type: string
+        contextType:
+          type: string
+        contextContent:
+          type: string
+        lastUpdated:
+          type: string
+          format: date-time
+
+    ContextInfoCreate:
+      type: object
+      required:
+        - projectId
+        - sessionId
+        - contextType
+        - contextContent
+      properties:
+        projectId:
+          type: string
+        sessionId:
+          type: string
+        contextType:
+          type: string
+        contextContent:
+          type: string
+
+    SessionInfo:
+      type: object
+      properties:
+        projectId:
+          type: string
+        sessionId:
+          type: string
+
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+security:
+  - apiKey: []

@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Novel Writing Assistant UI</title>
+    <style>
+      :root {
+        --bg: #0b0f14;
+        --panel: rgba(255, 255, 255, 0.06);
+        --panel-2: rgba(255, 255, 255, 0.08);
+        --border: rgba(255, 255, 255, 0.12);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.68);
+        --muted-2: rgba(255, 255, 255, 0.52);
+        --brand: #7c5cff;
+        --brand-2: #4dd6ff;
+        --danger: #ff5c7a;
+        --ok: #33d17a;
+        --shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+        --radius: 16px;
+        --radius-sm: 12px;
+        --gap: 16px;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif;
+        background:
+          radial-gradient(1200px 800px at 15% 10%, rgba(124, 92, 255, 0.30), transparent 55%),
+          radial-gradient(900px 600px at 75% 25%, rgba(77, 214, 255, 0.20), transparent 55%),
+          radial-gradient(900px 700px at 40% 95%, rgba(51, 209, 122, 0.12), transparent 55%),
+          var(--bg);
+        color: var(--text);
+      }
+
+      a { color: inherit; text-decoration: none; }
+      .app {
+        height: 100%;
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        gap: var(--gap);
+        padding: 18px;
+      }
+
+      .card {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.085), rgba(255, 255, 255, 0.045));
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(10px);
+      }
+
+      .sidebar {
+        display: grid;
+        grid-template-rows: auto auto 1fr auto;
+        overflow: hidden;
+        min-height: 0;
+      }
+
+      .sidebar__top {
+        padding: 18px 18px 12px 18px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .brand__logo {
+        width: 36px;
+        height: 36px;
+        border-radius: 12px;
+        background: radial-gradient(circle at 30% 30%, var(--brand-2), var(--brand));
+        box-shadow: 0 10px 24px rgba(124, 92, 255, 0.28);
+      }
+
+      .brand__title {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.1;
+      }
+      .brand__title strong { font-size: 14px; letter-spacing: 0.2px; }
+      .brand__title span { font-size: 12px; color: var(--muted); }
+
+      .sidebar__actions {
+        padding: 12px 18px;
+        display: grid;
+        gap: 10px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        height: 44px;
+        padding: 0 14px;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text);
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .btn:hover { background: rgba(255, 255, 255, 0.10); }
+      .btn:active { transform: translateY(1px); }
+      .btn--primary {
+        border-color: rgba(124, 92, 255, 0.55);
+        background: linear-gradient(180deg, rgba(124, 92, 255, 0.85), rgba(124, 92, 255, 0.55));
+      }
+      .btn--primary:hover { filter: brightness(1.05); }
+      .btn--ghost { background: transparent; }
+      .btn--danger {
+        border-color: rgba(255, 92, 122, 0.55);
+        background: rgba(255, 92, 122, 0.12);
+        color: rgba(255, 255, 255, 0.92);
+      }
+      .btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 12px;
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .search {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+      .input {
+        width: 100%;
+        height: 44px;
+        padding: 0 12px;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.22);
+        color: var(--text);
+        outline: none;
+      }
+      .input::placeholder { color: var(--muted-2); }
+
+      .projects {
+        padding: 12px;
+        overflow: auto;
+        min-height: 0;
+      }
+      .project {
+        padding: 12px;
+        border-radius: 14px;
+        border: 1px solid transparent;
+        background: rgba(255, 255, 255, 0.04);
+        display: grid;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+      .project--active {
+        background: rgba(124, 92, 255, 0.12);
+        border-color: rgba(124, 92, 255, 0.35);
+      }
+      .project__row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .project__name { font-weight: 700; font-size: 14px; }
+      .project__desc { color: var(--muted); font-size: 12px; line-height: 1.35; }
+      .project__meta { display: flex; gap: 8px; flex-wrap: wrap; }
+
+      .sidebar__footer {
+        padding: 14px 18px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .footer__left { display: grid; gap: 4px; }
+      .footer__left strong { font-size: 13px; }
+      .footer__left span { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+
+      .main {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .topbar {
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .topbar__title {
+        display: grid;
+        gap: 2px;
+      }
+      .topbar__title strong { font-size: 16px; }
+      .topbar__title span { font-size: 12px; color: var(--muted); }
+      .topbar__right { display: flex; gap: 10px; align-items: center; }
+
+      .tabs {
+        display: flex;
+        gap: 10px;
+        padding: 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.20);
+      }
+      .tab {
+        padding: 10px 12px;
+        border-radius: 999px;
+        color: var(--muted);
+        font-weight: 650;
+        font-size: 13px;
+        border: 1px solid transparent;
+      }
+      .tab--active {
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.10);
+      }
+
+      .content {
+        padding: 18px;
+        overflow: auto;
+        min-height: 0;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: var(--gap);
+        align-items: start;
+      }
+
+      .panel {
+        padding: 16px;
+        border-radius: var(--radius);
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border);
+      }
+
+      .panel h3 {
+        margin: 0 0 12px 0;
+        font-size: 14px;
+        letter-spacing: 0.2px;
+      }
+      .panel p {
+        margin: 0 0 12px 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .form {
+        display: grid;
+        gap: 12px;
+      }
+      .field {
+        display: grid;
+        gap: 8px;
+      }
+      .label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .select, .textarea {
+        width: 100%;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.22);
+        color: var(--text);
+        outline: none;
+      }
+      .select { height: 44px; padding: 0 12px; }
+      .textarea { padding: 12px; min-height: 120px; resize: vertical; }
+
+      .uploader {
+        border-radius: 14px;
+        border: 1px dashed rgba(255, 255, 255, 0.22);
+        background: rgba(0, 0, 0, 0.18);
+        padding: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .uploader__left { display: grid; gap: 4px; }
+      .uploader__left strong { font-size: 13px; }
+      .uploader__left span { font-size: 12px; color: var(--muted); }
+
+      .split {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .result {
+        padding: 16px;
+        border-radius: var(--radius);
+        border: 1px solid rgba(77, 214, 255, 0.22);
+        background: linear-gradient(180deg, rgba(77, 214, 255, 0.08), rgba(0, 0, 0, 0.18));
+      }
+      .result__head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .result__head strong { font-size: 14px; }
+      .result__head span { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+      .result__body {
+        color: rgba(255, 255, 255, 0.90);
+        font-size: 13px;
+        line-height: 1.7;
+        white-space: pre-wrap;
+      }
+
+      .list {
+        display: grid;
+        gap: 10px;
+      }
+      .item {
+        padding: 12px;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .item__top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .badge--init { border-color: rgba(124, 92, 255, 0.40); background: rgba(124, 92, 255, 0.12); }
+      .badge--cont { border-color: rgba(77, 214, 255, 0.35); background: rgba(77, 214, 255, 0.10); }
+      .item__time { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+      .item__text { font-size: 13px; color: var(--text); line-height: 1.6; }
+
+      .note {
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(0, 0, 0, 0.18);
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      @media (max-width: 1080px) {
+        .app { grid-template-columns: 1fr; }
+        .grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="card sidebar">
+        <div class="sidebar__top">
+          <div class="brand">
+            <div class="brand__logo" aria-hidden="true"></div>
+            <div class="brand__title">
+              <strong>小说写作助手</strong>
+              <span>UI 原型（HTML + CSS）</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="sidebar__actions">
+          <div class="search">
+            <input class="input" placeholder="搜索项目 / 标题…" />
+          </div>
+          <button class="btn btn--primary" type="button">新建项目</button>
+          <button class="btn btn--ghost" type="button">导入参考文档</button>
+        </div>
+
+        <div class="projects" role="list">
+          <div class="project project--active" role="listitem">
+            <div class="project__row">
+              <div class="project__name">雨夜书店</div>
+              <span class="pill">in_progress</span>
+            </div>
+            <div class="project__desc">一部悬疑向长篇，围绕失踪作者与旧书店的秘密展开。</div>
+            <div class="project__meta">
+              <span class="pill">题材：小说</span>
+              <span class="pill">字数：12,450</span>
+            </div>
+          </div>
+
+          <div class="project" role="listitem">
+            <div class="project__row">
+              <div class="project__name">星舰航线</div>
+              <span class="pill">draft</span>
+            </div>
+            <div class="project__desc">科幻短篇合集，节奏快、设定硬核。</div>
+            <div class="project__meta">
+              <span class="pill">题材：小说</span>
+              <span class="pill">字数：0</span>
+            </div>
+          </div>
+
+          <div class="project" role="listitem">
+            <div class="project__row">
+              <div class="project__name">品牌文案合集</div>
+              <span class="pill">archived</span>
+            </div>
+            <div class="project__desc">营销文案与产品描述模板沉淀。</div>
+            <div class="project__meta">
+              <span class="pill">题材：广告文案</span>
+              <span class="pill">字数：3,220</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="sidebar__footer">
+          <div class="footer__left">
+            <strong>当前项目</strong>
+            <span>demo-project-id</span>
+          </div>
+          <button class="btn btn--danger" type="button">删除</button>
+        </div>
+      </aside>
+
+      <main class="card main">
+        <div class="topbar">
+          <div class="topbar__title">
+            <strong>雨夜书店</strong>
+            <span>会话：sessionId: 2f7d…a9c1 · 上次更新：2026-02-12</span>
+          </div>
+          <div class="topbar__right">
+            <div class="tabs" role="tablist" aria-label="功能切换">
+              <span class="tab tab--active" role="tab" aria-selected="true">初始生成</span>
+              <span class="tab" role="tab" aria-selected="false">续写</span>
+              <span class="tab" role="tab" aria-selected="false">参数</span>
+              <span class="tab" role="tab" aria-selected="false">历史</span>
+            </div>
+            <button class="btn" type="button">保存</button>
+          </div>
+        </div>
+
+        <div class="content">
+          <div class="grid">
+            <section class="panel">
+              <h3>初始生成</h3>
+              <p>上传参考文档或填写写作方向，生成第一章并自动保存上下文（题材/大纲/人物/世界观/剧情/章节梗概等）。</p>
+
+              <div class="form">
+                <div class="field">
+                  <div class="label">参考文档</div>
+                  <div class="uploader" role="group" aria-label="参考文档上传">
+                    <div class="uploader__left">
+                      <strong>未选择文件</strong>
+                      <span>支持 txt / md（示例 UI，不含上传逻辑）</span>
+                    </div>
+                    <button class="btn" type="button">选择文件</button>
+                  </div>
+                </div>
+
+                <div class="split">
+                  <div class="field">
+                    <div class="label">题材类型</div>
+                    <select class="select" aria-label="题材类型">
+                      <option>小说</option>
+                      <option>散文</option>
+                      <option>诗歌</option>
+                      <option>剧本</option>
+                      <option>广告文案</option>
+                      <option>自定义</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <div class="label">创意程度</div>
+                    <select class="select" aria-label="创意程度">
+                      <option>中等创意</option>
+                      <option>低创意</option>
+                      <option>高创意</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <div class="label">写作内容走向</div>
+                  <textarea class="textarea" placeholder="例如：开篇引入主角与冲突，节奏紧凑，章末留悬念…"></textarea>
+                </div>
+
+                <div class="split">
+                  <button class="btn" type="button">重置</button>
+                  <button class="btn btn--primary" type="button">生成内容</button>
+                </div>
+
+                <div class="note">
+                  提示：续写模式将基于同一 sessionId 的上下文链路自动生成续写，用户无需重复上传参考内容。
+                </div>
+              </div>
+            </section>
+
+            <aside class="panel">
+              <h3>生成结果预览</h3>
+              <div class="result" role="region" aria-label="生成结果">
+                <div class="result__head">
+                  <strong>第 1 章（示例）</strong>
+                  <span>duration: 1240ms</span>
+                </div>
+                <div class="result__body">
+雨下得很慢，像在犹豫是否要把整座城都洗掉。主角站在巷口，手里攥着一张发黄的纸条，纸条上的地址指向一家早该关门的旧书店。
+
+门铃没有响，只有尘埃在光里漂浮。柜台后那盏灯像一只睁开的眼睛，盯着他不肯眨一下。墙上的钟走得不对，秒针每跳一下，时间都像被切开一条缝……
+                </div>
+              </div>
+
+              <div style="height: 12px"></div>
+
+              <div class="panel" style="padding: 12px; background: rgba(0,0,0,0.18);">
+                <h3 style="margin-bottom: 10px;">历史（示例）</h3>
+                <div class="list">
+                  <div class="item">
+                    <div class="item__top">
+                      <span class="badge badge--init">初始生成</span>
+                      <span class="item__time">2026-02-12T17:28:00Z</span>
+                    </div>
+                    <div class="item__text">远处钟声回荡，故事从一封未寄出的信开始……</div>
+                  </div>
+                  <div class="item">
+                    <div class="item__top">
+                      <span class="badge badge--cont">续写</span>
+                      <span class="item__time">2026-02-12T17:36:40Z</span>
+                    </div>
+                    <div class="item__text">他终于读懂了信里的名字，却已来不及回头。</div>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>
