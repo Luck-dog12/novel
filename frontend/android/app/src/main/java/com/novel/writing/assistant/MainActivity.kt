@@ -17,6 +17,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.novel.writing.assistant.network.ApiClient
 import com.novel.writing.assistant.theme.NovelWritingAssistantTheme
 import com.novel.writing.assistant.ui.screens.ConfigScreen
 import com.novel.writing.assistant.ui.screens.ContinueWritingScreen
@@ -27,6 +28,7 @@ import com.novel.writing.assistant.ui.screens.ResultScreen
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ApiClient.initialize(applicationContext)
         setContent {
             NovelWritingAssistantTheme {
                 // A surface container using the 'background' color from the theme
@@ -34,7 +36,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    UiSandbox()
+                    UiSandbox(uiOnly = false)
                 }
             }
         }
@@ -42,7 +44,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun UiSandbox() {
+fun UiSandbox(uiOnly: Boolean) {
     val projectId = "demo-project"
     var screen by remember { mutableStateOf("home") }
     var resultText by remember { mutableStateOf("（示例）生成结果将在这里显示") }
@@ -70,7 +72,7 @@ fun UiSandbox() {
                 resultText = it
                 screen = "result"
             },
-            uiOnly = true
+            uiOnly = uiOnly
         )
         "continue" -> ContinueWritingScreen(
             projectId = projectId,
@@ -79,13 +81,13 @@ fun UiSandbox() {
                 resultText = it
                 screen = "result"
             },
-            uiOnly = true
+            uiOnly = uiOnly
         )
         "config" -> ConfigScreen(
             projectId = projectId,
             onBackClick = { screen = "home" },
             onConfigSaved = { screen = "home" },
-            uiOnly = true
+            uiOnly = uiOnly
         )
         "history" -> HistoryScreen(
             projectId = projectId,
@@ -94,7 +96,7 @@ fun UiSandbox() {
                 resultText = it
                 screen = "result"
             },
-            uiOnly = true
+            uiOnly = uiOnly
         )
         "result" -> ResultScreen(
             generatedContent = resultText,
@@ -108,6 +110,6 @@ fun UiSandbox() {
 @Composable
 fun GreetingPreview() {
     NovelWritingAssistantTheme {
-        UiSandbox()
+        UiSandbox(uiOnly = true)
     }
 }

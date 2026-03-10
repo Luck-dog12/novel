@@ -5,6 +5,8 @@ import io.ktor.server.routing.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.http.*
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import com.novel.writing.assistant.model.ContextInfoCreate
 import com.novel.writing.assistant.model.ConfigRequest
 import com.novel.writing.assistant.model.GenerationRequest
@@ -107,6 +109,28 @@ fun Application.configureRouting() {
                             call.respond(HttpStatusCode.BadRequest, e.message ?: "Missing sessionId")
                         } catch (e: NoContextException) {
                             call.respond(HttpStatusCode.Conflict, e.message ?: "No context")
+                        }
+                    }
+                    post("/stream") {
+                        val request = call.receive<GenerationRequest>()
+                        call.respondTextWriter(ContentType.Text.EventStream) {
+                            try {
+                                val response = GenerationService.generateContentStream(request) { frame ->
+                                    write(frame)
+                                    flush()
+                                }
+                                write("event: done\ndata: ${Json.encodeToString(response)}\n\n")
+                                flush()
+                            } catch (e: MissingSessionIdException) {
+                                write("event: error\ndata: ${Json.encodeToString(mapOf("message" to (e.message ?: "Missing sessionId")))}\n\n")
+                                flush()
+                            } catch (e: NoContextException) {
+                                write("event: error\ndata: ${Json.encodeToString(mapOf("message" to (e.message ?: "No context")))}\n\n")
+                                flush()
+                            } catch (e: Exception) {
+                                write("event: error\ndata: ${Json.encodeToString(mapOf("message" to (e.message ?: "stream generation failed")))}\n\n")
+                                flush()
+                            }
                         }
                     }
                 }

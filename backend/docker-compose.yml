@@ -6,7 +6,12 @@ services:
     ports:
       - "8080:8080"
     environment:
-      COZE_API_KEY: ${COZE_API_KEY}
+      COZE_API_BASE_URL: ${COZE_API_BASE_URL:-http://127.0.0.1:5000}
+      COZE_API_RUN_PATH: ${COZE_API_RUN_PATH:-/run}
+      COZE_API_STREAM_PATH: ${COZE_API_STREAM_PATH:-/stream_run}
+      COZE_API_TOKEN: ${COZE_API_TOKEN:-}
+      COZE_API_KEY: ${COZE_API_KEY:-}
+      COZE_API_URL: ${COZE_API_URL:-}
       APP_SECRET_KEY: ${APP_SECRET_KEY}
       REQUIRE_DB: ${REQUIRE_DB:-true}
       DB_URL: ${DB_URL}

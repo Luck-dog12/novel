@@ -4,16 +4,33 @@ import com.novel.writing.assistant.utils.CacheManager
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
+import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 class ApiService {
+    private val json = Json { ignoreUnknownKeys = true }
+
+    data class GenerationStreamEvent(
+        val event: String,
+        val data: String,
+        val partialOutput: String? = null,
+        val errorMessage: String? = null
+    )
+
     suspend fun generateContent(projectId: String, isContinueWriting: Boolean, referenceFileId: String?, 
                               referenceDoc: String?, genreType: String?, writingDirection: String?, sessionId: String? = null): GenerationResponse {
         return withContext(Dispatchers.IO) {
-            val response = ApiClient.client.post("${ApiClient.baseUrl}/v1/generation") {
+            val baseUrl = ApiClient.getBaseUrl()
+            val response = ApiClient.client.post("$baseUrl/v1/generation") {
                 contentType(ContentType.Application.Json)
                 setBody(
                     GenerationRequest(
@@ -30,6 +47,84 @@ class ApiService {
             response.body<GenerationResponse>()
         }
     }
+
+    suspend fun generateContentStream(
+        projectId: String,
+        isContinueWriting: Boolean,
+        referenceFileId: String?,
+        referenceDoc: String?,
+        genreType: String?,
+        writingDirection: String?,
+        sessionId: String? = null,
+        onEvent: suspend (GenerationStreamEvent) -> Unit = {}
+    ): GenerationResponse {
+        return withContext(Dispatchers.IO) {
+            val baseUrl = ApiClient.getBaseUrl()
+            val response = ApiClient.client.post("$baseUrl/v1/generation/stream") {
+                contentType(ContentType.Application.Json)
+                accept(ContentType.Text.EventStream)
+                setBody(
+                    GenerationRequest(
+                        projectId = projectId,
+                        isContinueWriting = isContinueWriting,
+                        sessionId = sessionId,
+                        referenceFileId = referenceFileId,
+                        referenceDoc = referenceDoc,
+                        genreType = genreType,
+                        writingDirection = writingDirection
+                    )
+                )
+            }
+            if (!response.status.isSuccess()) {
+                throw IllegalStateException("流式生成请求失败：${response.status.value}")
+            }
+            val channel = response.bodyAsChannel()
+            var currentEvent = "message"
+            val dataLines = mutableListOf<String>()
+            var finalResponse: GenerationResponse? = null
+
+            suspend fun handleFrame(eventName: String, payload: String) {
+                val partial = extractFinalDocument(payload)
+                val error = if (eventName == "error") extractErrorMessage(payload) else null
+                onEvent(
+                    GenerationStreamEvent(
+                        event = eventName,
+                        data = payload,
+                        partialOutput = partial,
+                        errorMessage = error
+                    )
+                )
+                if (eventName == "done") {
+                    finalResponse = json.decodeFromString<GenerationResponse>(payload)
+                }
+            }
+
+            while (!channel.isClosedForRead) {
+                val line = channel.readUTF8Line(Int.MAX_VALUE) ?: break
+                when {
+                    line.startsWith("event:") -> {
+                        currentEvent = line.removePrefix("event:").trim().ifBlank { "message" }
+                    }
+                    line.startsWith("data:") -> {
+                        dataLines.add(line.removePrefix("data:").trim())
+                    }
+                    line.isBlank() -> {
+                        if (dataLines.isNotEmpty()) {
+                            val payload = dataLines.joinToString("\n")
+                            handleFrame(currentEvent, payload)
+                            dataLines.clear()
+                            currentEvent = "message"
+                        }
+                    }
+                }
+            }
+            if (dataLines.isNotEmpty()) {
+                val payload = dataLines.joinToString("\n")
+                handleFrame(currentEvent, payload)
+            }
+            finalResponse ?: throw IllegalStateException("流式生成未返回完成事件")
+        }
+    }
     
     suspend fun getProjects(): List<Project> {
         val cacheKey = "projects"
@@ -40,7 +135,8 @@ class ApiService {
         }
         
         return withContext(Dispatchers.IO) {
-            val response = ApiClient.client.get("${ApiClient.baseUrl}/v1/projects")
+            val baseUrl = ApiClient.getBaseUrl()
+            val response = ApiClient.client.get("$baseUrl/v1/projects")
             val projects = response.body<List<Project>>()
             
             // 缓存结果
@@ -52,7 +148,8 @@ class ApiService {
     
     suspend fun createProject(title: String, description: String, genreType: String): Project {
         return withContext(Dispatchers.IO) {
-            val response = ApiClient.client.post("${ApiClient.baseUrl}/v1/projects") {
+            val baseUrl = ApiClient.getBaseUrl()
+            val response = ApiClient.client.post("$baseUrl/v1/projects") {
                 contentType(ContentType.Application.Json)
                 setBody(ProjectCreateRequest(title = title, description = description, genreType = genreType))
             }
@@ -67,7 +164,8 @@ class ApiService {
     
     suspend fun uploadDocument(projectId: String, fileBytes: ByteArray, fileName: String): Document {
         return withContext(Dispatchers.IO) {
-            val response = ApiClient.client.post("${ApiClient.baseUrl}/v1/documents") {
+            val baseUrl = ApiClient.getBaseUrl()
+            val response = ApiClient.client.post("$baseUrl/v1/documents") {
                 contentType(ContentType.MultiPart.FormData)
                 setBody(
                     MultiPartFormDataContent(
@@ -100,7 +198,8 @@ class ApiService {
     
     suspend fun saveConfig(config: ConfigRequest): ConfigResponse {
         return withContext(Dispatchers.IO) {
-            val response = ApiClient.client.post("${ApiClient.baseUrl}/v1/config") {
+            val baseUrl = ApiClient.getBaseUrl()
+            val response = ApiClient.client.post("$baseUrl/v1/config") {
                 contentType(ContentType.Application.Json)
                 setBody(config)
             }
@@ -111,7 +210,8 @@ class ApiService {
     suspend fun getConfig(projectId: String): ConfigResponse? {
         return withContext(Dispatchers.IO) {
             try {
-                val response = ApiClient.client.get("${ApiClient.baseUrl}/v1/config/$projectId")
+                val baseUrl = ApiClient.getBaseUrl()
+                val response = ApiClient.client.get("$baseUrl/v1/config/$projectId")
                 response.body()
             } catch (e: Exception) {
                 null
@@ -121,7 +221,8 @@ class ApiService {
     
     suspend fun getHistoryByProjectId(projectId: String): List<GenerationHistory> {
         return withContext(Dispatchers.IO) {
-            val response = ApiClient.client.get("${ApiClient.baseUrl}/v1/history") {
+            val baseUrl = ApiClient.getBaseUrl()
+            val response = ApiClient.client.get("$baseUrl/v1/history") {
                 parameter("projectId", projectId)
             }
             response.body()
@@ -130,7 +231,8 @@ class ApiService {
 
     suspend fun getContextByProjectId(projectId: String, sessionId: String? = null): List<ContextInfo> {
         return withContext(Dispatchers.IO) {
-            val response = ApiClient.client.get("${ApiClient.baseUrl}/v1/context") {
+            val baseUrl = ApiClient.getBaseUrl()
+            val response = ApiClient.client.get("$baseUrl/v1/context") {
                 parameter("projectId", projectId)
                 if (!sessionId.isNullOrBlank()) {
                     parameter("sessionId", sessionId)
@@ -143,7 +245,8 @@ class ApiService {
     suspend fun getLatestSessionId(projectId: String): String? {
         return withContext(Dispatchers.IO) {
             try {
-                val response = ApiClient.client.get("${ApiClient.baseUrl}/v1/sessions/latest") {
+                val baseUrl = ApiClient.getBaseUrl()
+                val response = ApiClient.client.get("$baseUrl/v1/sessions/latest") {
                     parameter("projectId", projectId)
                 }
                 response.body<SessionInfo>().sessionId
@@ -151,6 +254,44 @@ class ApiService {
                 null
             }
         }
+    }
+
+    private fun extractErrorMessage(payload: String): String? {
+        val element = runCatching { json.parseToJsonElement(payload) }.getOrNull() ?: return payload
+        return findStringByKey(element, "message") ?: payload
+    }
+
+    private fun extractFinalDocument(payload: String): String? {
+        val element = runCatching { json.parseToJsonElement(payload) }.getOrNull() ?: return null
+        return findStringByKey(element, "final_document")
+    }
+
+    private fun findStringByKey(element: JsonElement, key: String): String? {
+        when (element) {
+            is JsonObject -> {
+                element[key]?.let { value ->
+                    if (value is JsonPrimitive && value.isString) {
+                        return value.content
+                    }
+                }
+                element.values.forEach { nested ->
+                    val found = findStringByKey(nested, key)
+                    if (!found.isNullOrBlank()) {
+                        return found
+                    }
+                }
+            }
+            is JsonArray -> {
+                element.forEach { nested ->
+                    val found = findStringByKey(nested, key)
+                    if (!found.isNullOrBlank()) {
+                        return found
+                    }
+                }
+            }
+            else -> {}
+        }
+        return null
     }
 }
 

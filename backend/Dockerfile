@@ -10,8 +10,8 @@ COPY . .
 # Build project
 RUN gradle clean installDist --no-daemon
 
-# Use AdoptOpenJDK 11 as base image for runtime
-FROM adoptopenjdk:11-jre-hotspot
+# Use Eclipse Temurin 11 as base image for runtime (AdoptOpenJDK is deprecated)
+FROM eclipse-temurin:11-jre
 
 # Set working directory
 WORKDIR /app

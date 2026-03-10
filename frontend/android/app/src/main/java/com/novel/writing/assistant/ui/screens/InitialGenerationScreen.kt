@@ -48,6 +48,7 @@ fun InitialGenerationScreen(
     var isGenreExpanded by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var generationResult by remember { mutableStateOf<String?>(null) }
+    var loadingMessage by remember { mutableStateOf("正在生成内容...") }
     
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -234,6 +235,7 @@ fun InitialGenerationScreen(
                 scope.launch {
                     isLoading = true
                     errorMessage = null
+                    loadingMessage = "正在连接流式生成..."
                     focusManager.clearFocus()
                     
                     try {
@@ -242,14 +244,30 @@ fun InitialGenerationScreen(
                             onGenerationComplete(generationResult ?: "")
                             return@launch
                         }
-                        val result = apiService.generateContent(
+                        val result = apiService.generateContentStream(
                             projectId = projectId,
                             isContinueWriting = false,
                             referenceFileId = selectedDocumentId,
                             referenceDoc = referenceDocText.takeIf { it.isNotBlank() },
                             genreType = selectedGenre,
                             writingDirection = writingDirection
-                        )
+                        ) { event ->
+                            when (event.event) {
+                                "error" -> {
+                                    loadingMessage = "流式生成异常：${event.errorMessage ?: "未知错误"}"
+                                }
+                                "done" -> {
+                                    loadingMessage = "生成完成，正在整理结果..."
+                                }
+                                else -> {
+                                    event.partialOutput?.let { partial ->
+                                        if (partial.isNotBlank()) {
+                                            loadingMessage = "正在生成中（已接收 ${partial.length} 字）..."
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         sessionIdStore.saveSessionId(projectId, result.sessionId)
                         generationResult = result.outputContent
                         onGenerationComplete(result.outputContent)
@@ -274,7 +292,7 @@ fun InitialGenerationScreen(
     
     // Loading State
     if (isLoading) {
-        LoadingScreen()
+        LoadingScreen(message = loadingMessage)
     }
     
     // Error State

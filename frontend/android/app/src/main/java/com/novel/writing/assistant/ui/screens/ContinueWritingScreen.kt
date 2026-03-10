@@ -31,6 +31,7 @@ fun ContinueWritingScreen(
     var sessionId by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var loadingMessage by remember { mutableStateOf("正在生成续写...") }
 
     LaunchedEffect(projectId, uiOnly) {
         if (uiOnly) {
@@ -120,6 +121,7 @@ fun ContinueWritingScreen(
                 scope.launch {
                     isLoading = true
                     errorMessage = null
+                    loadingMessage = "正在连接流式续写..."
                     
                     try {
                         if (uiOnly) {
@@ -137,7 +139,7 @@ fun ContinueWritingScreen(
                             errorMessage = "未找到可用的会话信息，请先完成一次初始生成"
                             return@launch
                         }
-                        val result = apiService.generateContent(
+                        val result = apiService.generateContentStream(
                             projectId = projectId,
                             isContinueWriting = true,
                             referenceFileId = null,
@@ -145,7 +147,23 @@ fun ContinueWritingScreen(
                             genreType = null,
                             writingDirection = null,
                             sessionId = sessionId
-                        )
+                        ) { event ->
+                            when (event.event) {
+                                "error" -> {
+                                    loadingMessage = "流式续写异常：${event.errorMessage ?: "未知错误"}"
+                                }
+                                "done" -> {
+                                    loadingMessage = "续写完成，正在整理结果..."
+                                }
+                                else -> {
+                                    event.partialOutput?.let { partial ->
+                                        if (partial.isNotBlank()) {
+                                            loadingMessage = "续写进行中（已接收 ${partial.length} 字）..."
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         onGenerationComplete(result.outputContent)
                     } catch (e: Exception) {
                         errorMessage = "生成失败：${e.message}"
@@ -168,7 +186,7 @@ fun ContinueWritingScreen(
     
     // Loading State
     if (isLoading) {
-        LoadingScreen()
+        LoadingScreen(message = loadingMessage)
     }
     
     // Error State
