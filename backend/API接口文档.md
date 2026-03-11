@@ -43,18 +43,13 @@ Content-Type: application/json
 
 | 参数名 | 类型 | 必填 | 默认值 | 描述 |
 |--------|------|------|--------|------|
-| `reference_file` | Object | 条件必填 | null | 参考文档文件对象，初始生成模式必填 |
-| `reference_doc` | String | 否 | "" | 参考文档内容，优先级高于 reference_file |
+| `reference_file` | String | 条件必填 | "" | 参考文档内容（文本格式），初始生成模式必填，续写模式可选 |
+| `reference_doc` | String | 否 | "" | 参考文档内容（与 reference_file 等效，优先级更高） |
 | `genre_type` | String | 否 | "小说" | 题材类型 |
 | `writing_direction` | String | 否 | "" | 写作内容走向描述 |
 | `is_continue_writing` | Boolean | 否 | false | 是否为续写模式 |
 
-#### reference_file 对象结构
-
-| 参数名 | 类型 | 必填 | 描述 |
-|--------|------|------|------|
-| `url` | String | 是 | 文件URL或本地路径 |
-| `file_type` | String | 否 | 文件类型（image/video/audio/document/default） |
+> **说明**：`reference_file` 和 `reference_doc` 功能相同，都是传入文本格式的参考文档内容。`reference_doc` 优先级更高，建议统一使用 `reference_file` 参数。
 
 #### genre_type 可选值
 
@@ -77,17 +72,14 @@ Content-Type: application/json
 
 ```json
 {
-  "reference_file": {
-    "url": "https://example.com/reference.md",
-    "file_type": "document"
-  },
+  "reference_file": "青溪村是一个与世隔绝的神秘村庄，流传着关于友谊之石的传说。据说友谊之石拥有让两个真心相待的人友谊永恒的力量。老村长掌握着村庄历史的秘密。林野勇敢但冒失，周子墨聪明但胆小。迷雾森林是一个危险而神秘的地方。真正的友谊不需要外物来证明。",
   "genre_type": "小说",
   "writing_direction": "讲述两个少年在迷雾森林中寻找友谊之石的冒险故事",
   "is_continue_writing": false
 }
 ```
 
-或直接提供文档内容：
+或使用 `reference_doc` 参数（等效）：
 
 ```json
 {
@@ -387,16 +379,13 @@ GET /graph_parameter
   "input_schema": {
     "properties": {
       "reference_file": {
-        "anyOf": [
-          {"$ref": "#/definitions/File"},
-          {"type": "null"}
-        ],
-        "default": null,
-        "description": "参考文档文件（.md或.txt格式），初始生成模式必填，续写模式可选"
+        "default": "",
+        "description": "参考文档内容（文本格式），初始生成模式必填，续写模式可选",
+        "type": "string"
       },
       "reference_doc": {
         "default": "",
-        "description": "参考文档内容（续写模式使用），优先级高于reference_file",
+        "description": "参考文档内容（与reference_file等效，优先级更高）",
         "type": "string"
       },
       "genre_type": {
@@ -505,7 +494,7 @@ GET /graph_parameter
 |--------|--------|
 | 每次写作字数上限 | 10000字 |
 | 质量达标阈值 | 75分 |
-| 参考文档格式 | .md 或 .txt |
+| 参考文档格式 | 文本格式（String） |
 | 续写模式每次章节数 | 2个章节 |
 | 续写模式质量检查次数 | 最多2次 |
 | 每章字数范围 | 2200-2700字 |
@@ -517,4 +506,5 @@ GET /graph_parameter
 
 | 版本 | 日期 | 变更说明 |
 |------|------|---------|
+| 1.1.0 | 2026-02-05 | 将 reference_file 参数类型从 File 改为 String，简化参数传递 |
 | 1.0.0 | 2026-02-05 | 初始版本 |
