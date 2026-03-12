@@ -34,6 +34,9 @@ fun Application.configureRouting() {
         // API routes
         route("/api") {
             route("/v1") {
+                get("/health") {
+                    call.respondText("OK", ContentType.Text.Plain)
+                }
                 // Project routes
                 route("/projects") {
                     get {

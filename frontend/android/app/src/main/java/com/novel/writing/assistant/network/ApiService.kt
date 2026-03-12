@@ -44,6 +44,10 @@ class ApiService {
                     )
                 )
             }
+            if (!response.status.isSuccess()) {
+                val errorBody = response.bodyAsText()
+                throw IllegalStateException("生成请求失败：${response.status.value} ${errorBody.take(400)}")
+            }
             response.body<GenerationResponse>()
         }
     }
@@ -76,7 +80,8 @@ class ApiService {
                 )
             }
             if (!response.status.isSuccess()) {
-                throw IllegalStateException("流式生成请求失败：${response.status.value}")
+                val errorBody = response.bodyAsText()
+                throw IllegalStateException("流式生成请求失败：${response.status.value} ${errorBody.take(400)}")
             }
             val channel = response.bodyAsChannel()
             var currentEvent = "message"
@@ -100,7 +105,7 @@ class ApiService {
             }
 
             while (!channel.isClosedForRead) {
-                val line = channel.readUTF8Line(Int.MAX_VALUE) ?: break
+                val line = channel.readUTF8Line(65536) ?: break
                 when {
                     line.startsWith("event:") -> {
                         currentEvent = line.removePrefix("event:").trim().ifBlank { "message" }
@@ -184,15 +189,6 @@ class ApiService {
                 )
             }
             response.body()
-        }
-    }
-    
-    // Overload for File parameter
-    suspend fun uploadDocument(file: java.io.File): String {
-        return withContext(Dispatchers.IO) {
-            // In production, we would read the file and upload it
-            // For now, return a mock document ID
-            "mock-document-id-${System.currentTimeMillis()}"
         }
     }
     

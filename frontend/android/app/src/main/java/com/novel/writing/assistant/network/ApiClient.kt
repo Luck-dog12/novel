@@ -5,6 +5,7 @@ import android.os.Build
 import com.novel.writing.assistant.BuildConfig
 import io.ktor.client.*
 import io.ktor.client.engine.okhttp.*
+import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.logging.*
 import io.ktor.serialization.kotlinx.json.*
@@ -20,6 +21,7 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.URI
 import java.util.Collections
+import java.util.concurrent.TimeUnit
 
 object ApiClient {
     private const val PREFS_NAME = "network_resolver"
@@ -75,6 +77,15 @@ object ApiClient {
     }
 
     val client = HttpClient(OkHttp) {
+        engine {
+            config {
+                connectTimeout(15, TimeUnit.SECONDS)
+                writeTimeout(60, TimeUnit.SECONDS)
+                readTimeout(0, TimeUnit.SECONDS)
+                callTimeout(320, TimeUnit.SECONDS)
+                retryOnConnectionFailure(true)
+            }
+        }
         install(ContentNegotiation) {
             json(Json {
                 ignoreUnknownKeys = true
@@ -82,7 +93,7 @@ object ApiClient {
             })
         }
         install(Logging) {
-            level = LogLevel.INFO
+            level = if (BuildConfig.DEBUG) LogLevel.INFO else LogLevel.NONE
         }
     }
 

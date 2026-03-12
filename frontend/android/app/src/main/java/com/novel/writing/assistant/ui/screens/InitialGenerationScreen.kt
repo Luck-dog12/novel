@@ -54,8 +54,21 @@ fun InitialGenerationScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        selectedDocumentId = "local-${System.currentTimeMillis()}"
         selectedFileName = uri.lastPathSegment ?: "selected-file"
+        scope.launch {
+            isUploading = true
+            errorMessage = null
+            try {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalStateException("无法读取文件内容")
+                referenceDocText = bytes.toString(Charsets.UTF_8).trim()
+                selectedDocumentId = null
+            } catch (e: Exception) {
+                errorMessage = "文件读取失败：${e.message}"
+            } finally {
+                isUploading = false
+            }
+        }
     }
     
     val genres = listOf(
@@ -247,7 +260,7 @@ fun InitialGenerationScreen(
                         val result = apiService.generateContentStream(
                             projectId = projectId,
                             isContinueWriting = false,
-                            referenceFileId = selectedDocumentId,
+                            referenceFileId = null,
                             referenceDoc = referenceDocText.takeIf { it.isNotBlank() },
                             genreType = selectedGenre,
                             writingDirection = writingDirection
