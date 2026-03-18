@@ -5,6 +5,7 @@ import io.ktor.server.routing.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.http.*
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import com.novel.writing.assistant.model.ContextInfoCreate
@@ -20,7 +21,23 @@ import com.novel.writing.assistant.service.GenerationService
 import com.novel.writing.assistant.service.HistoryService
 import com.novel.writing.assistant.service.MissingSessionIdException
 import com.novel.writing.assistant.service.NoContextException
+import com.novel.writing.assistant.service.OAuthBridgeService
 import com.novel.writing.assistant.service.ProjectService
+
+@Serializable
+data class OAuthAuthorizeUrlView(
+    val authorizeUrl: String,
+    val state: String,
+    val redirectUri: String
+)
+
+@Serializable
+data class OAuthCallbackView(
+    val ok: Boolean,
+    val message: String,
+    val expiresAt: Long,
+    val hasRefreshToken: Boolean
+)
 
 fun Application.configureRouting() {
     routing {
@@ -115,8 +132,14 @@ fun Application.configureRouting() {
                         }
                     }
                     post("/stream") {
-                        val request = call.receive<GenerationRequest>()
                         call.respondTextWriter(ContentType.Text.EventStream) {
+                            val request = try {
+                                call.receive<GenerationRequest>()
+                            } catch (e: Exception) {
+                                write("event: error\ndata: ${Json.encodeToString(mapOf("message" to (e.message ?: "invalid request")))}\n\n")
+                                flush()
+                                return@respondTextWriter
+                            }
                             try {
                                 val response = GenerationService.generateContentStream(request) { frame ->
                                     write(frame)
@@ -174,6 +197,42 @@ fun Application.configureRouting() {
                         val latestSessionId = ContextService.getLatestSessionId(projectId)
                             ?: return@get call.respond(HttpStatusCode.NotFound, "Session not found")
                         call.respond(SessionInfo(projectId = projectId, sessionId = latestSessionId))
+                    }
+                }
+
+                route("/oauth") {
+                    route("/coze") {
+                        get("/authorize-url") {
+                            val state = call.request.queryParameters["state"]?.trim()
+                            val response = OAuthBridgeService.getAuthorizeUrl(state)
+                            call.respond(
+                                OAuthAuthorizeUrlView(
+                                    authorizeUrl = response.authorize_url,
+                                    state = response.state,
+                                    redirectUri = response.redirect_uri
+                                )
+                            )
+                        }
+                        get("/callback") {
+                            val error = call.request.queryParameters["error"]?.trim().orEmpty()
+                            if (error.isNotBlank()) {
+                                return@get call.respond(HttpStatusCode.BadRequest, "OAuth callback error: $error")
+                            }
+                            val code = call.request.queryParameters["code"]?.trim().orEmpty()
+                            if (code.isBlank()) {
+                                return@get call.respond(HttpStatusCode.BadRequest, "Missing OAuth code")
+                            }
+                            val state = call.request.queryParameters["state"]?.trim()
+                            val response = OAuthBridgeService.submitOAuthCode(code, state)
+                            call.respond(
+                                OAuthCallbackView(
+                                    ok = response.ok,
+                                    message = "OAuth callback handled",
+                                    expiresAt = response.expires_at,
+                                    hasRefreshToken = response.has_refresh_token
+                                )
+                            )
+                        }
                     }
                 }
 

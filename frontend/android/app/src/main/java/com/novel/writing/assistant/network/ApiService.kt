@@ -254,12 +254,15 @@ class ApiService {
 
     private fun extractErrorMessage(payload: String): String? {
         val element = runCatching { json.parseToJsonElement(payload) }.getOrNull() ?: return payload
-        return findStringByKey(element, "message") ?: payload
+        return findStringByKey(element, "message")
+            ?: findStringByKey(element, "error_message")
+            ?: payload
     }
 
     private fun extractFinalDocument(payload: String): String? {
         val element = runCatching { json.parseToJsonElement(payload) }.getOrNull() ?: return null
         return findStringByKey(element, "final_document")
+            ?: findStringByKey(element, "content")
     }
 
     private fun findStringByKey(element: JsonElement, key: String): String? {

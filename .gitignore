@@ -14,3 +14,5 @@ backend/logs/
 *.tar
 payload_full.json
 testtxt.txt
+**/node_modules/
+backend/coze-sdk-bridge/package-lock.json

@@ -8,6 +8,7 @@ import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import io.ktor.http.content.*
 import io.ktor.utils.io.*
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
@@ -89,29 +90,55 @@ object GenerationService {
         ignoreUnknownKeys = true
         isLenient = true
     }
-    private val WORKFLOW_API_BASE_URL = (
-        System.getenv("COZE_API_BASE_URL")
-            ?: System.getenv("COZE_API_URL")
-            ?: "http://127.0.0.1:5000"
-        ).trimEnd('/')
-    private val WORKFLOW_API_TOKEN = (
-        System.getenv("COZE_API_TOKEN")
-            ?: System.getenv("COZE_API_KEY")
-            ?: ""
-        ).trim()
-    private val WORKFLOW_RUN_PATH = (
-        System.getenv("COZE_API_RUN_PATH")
-            ?: "/run"
-        ).trim().ifBlank { "/run" }
-    private val WORKFLOW_STREAM_PATH = (
-        System.getenv("COZE_API_STREAM_PATH")
-            ?: "/stream_run"
-        ).trim().ifBlank { "/stream_run" }
-    private val ENABLE_MOCK_FALLBACK = parseEnvBoolean("ENABLE_MOCK_FALLBACK", defaultValue = false)
-    private val WORKFLOW_FORCE_SYNC_FOR_STREAM = parseEnvBoolean("COZE_FORCE_SYNC_FOR_STREAM", defaultValue = false)
-    private val WORKFLOW_STREAM_FALLBACK_TO_RUN = parseEnvBoolean("COZE_STREAM_FALLBACK_TO_RUN", defaultValue = true)
-    private val WORKFLOW_RUN_URL = "$WORKFLOW_API_BASE_URL${if (WORKFLOW_RUN_PATH.startsWith("/")) WORKFLOW_RUN_PATH else "/$WORKFLOW_RUN_PATH"}"
-    private val WORKFLOW_STREAM_URL = "$WORKFLOW_API_BASE_URL${if (WORKFLOW_STREAM_PATH.startsWith("/")) WORKFLOW_STREAM_PATH else "/$WORKFLOW_STREAM_PATH"}"
+    private fun workflowApiBaseUrl(): String {
+        return (
+            System.getProperty("COZE_WORKFLOW_BASE_URL")
+                ?: System.getenv("COZE_WORKFLOW_BASE_URL")
+                ?: System.getProperty("COZE_BRIDGE_BASE_URL")
+                ?: System.getenv("COZE_BRIDGE_BASE_URL")
+                ?: System.getProperty("COZE_API_BASE_URL")
+                ?: System.getenv("COZE_API_BASE_URL")
+                ?: System.getProperty("COZE_API_URL")
+                ?: System.getenv("COZE_API_URL")
+                ?: "http://127.0.0.1:8787"
+            ).trim().trimEnd('/')
+    }
+
+    private fun workflowApiToken(): String {
+        return (
+            System.getProperty("COZE_WORKFLOW_TOKEN")
+                ?: System.getenv("COZE_WORKFLOW_TOKEN")
+                ?: System.getProperty("COZE_BRIDGE_TOKEN")
+                ?: System.getenv("COZE_BRIDGE_TOKEN")
+                ?: System.getProperty("COZE_API_TOKEN")
+                ?: System.getenv("COZE_API_TOKEN")
+                ?: System.getProperty("COZE_API_KEY")
+                ?: System.getenv("COZE_API_KEY")
+                ?: ""
+            ).trim()
+    }
+
+    private fun workflowRunPath(): String {
+        return (
+            System.getProperty("COZE_WORKFLOW_RUN_PATH")
+                ?: System.getenv("COZE_WORKFLOW_RUN_PATH")
+                ?: System.getProperty("COZE_BRIDGE_RUN_PATH")
+                ?: System.getenv("COZE_BRIDGE_RUN_PATH")
+                ?: System.getProperty("COZE_API_RUN_PATH")
+                ?: System.getenv("COZE_API_RUN_PATH")
+                ?: "/run"
+            ).trim().ifBlank { "/run" }
+    }
+
+    private fun workflowRunUrl(): String {
+        val base = workflowApiBaseUrl()
+        val path = workflowRunPath()
+        return "$base${if (path.startsWith("/")) path else "/$path"}"
+    }
+
+    private fun enableMockFallback(): Boolean = parseEnvBoolean("ENABLE_MOCK_FALLBACK", defaultValue = false)
+    private fun workflowForceSyncForStream(): Boolean = parseEnvBoolean("COZE_FORCE_SYNC_FOR_STREAM", defaultValue = false)
+    private fun workflowStreamFallbackToRun(): Boolean = parseEnvBoolean("COZE_STREAM_FALLBACK_TO_RUN", defaultValue = true)
     
     suspend fun generateContent(request: GenerationRequest): GenerationResponse {
         val startTime = System.currentTimeMillis()
@@ -143,7 +170,7 @@ object GenerationService {
                     "generationType" to if (request.isContinueWriting) "continuation" else "initial"
                 )
             )
-            if (ENABLE_MOCK_FALLBACK) mockGenerationContent(request.isContinueWriting) else throw e
+            if (enableMockFallback()) mockGenerationContent(request.isContinueWriting) else throw e
         }
         
         val duration = System.currentTimeMillis() - startTime
@@ -200,7 +227,7 @@ object GenerationService {
                     "mode" to "stream"
                 )
             )
-            if (ENABLE_MOCK_FALLBACK) {
+            if (enableMockFallback()) {
                 emitSseFrame("event: error\ndata: ${workflowJson.encodeToString(mapOf("message" to (e.message ?: "stream generation failed")))}\n\n")
                 mockGenerationContent(request.isContinueWriting)
             } else {
@@ -228,7 +255,7 @@ object GenerationService {
     }
     
     private suspend fun generateInitial(request: GenerationRequest): String {
-        val referenceDoc = resolveReferenceDoc(request)
+        val referenceDoc = buildInitialReferenceDoc(request)
         val runRequest = WorkflowRunRequest(
             referenceFile = referenceDoc,
             referenceDoc = referenceDoc,
@@ -243,7 +270,7 @@ object GenerationService {
         request: GenerationRequest,
         emitSseFrame: suspend (String) -> Unit
     ): String {
-        val referenceDoc = resolveReferenceDoc(request)
+        val referenceDoc = buildInitialReferenceDoc(request)
         val runRequest = WorkflowRunRequest(
             referenceFile = referenceDoc,
             referenceDoc = referenceDoc,
@@ -352,6 +379,17 @@ object GenerationService {
             .trim()
     }
 
+    private fun buildInitialReferenceDoc(request: GenerationRequest): String {
+        val raw = resolveReferenceDoc(request).trim()
+        val genre = request.genreType?.trim().orEmpty()
+        val direction = request.writingDirection?.trim().orEmpty()
+        return buildString {
+            if (genre.isNotBlank()) append("题材：$genre\n")
+            if (direction.isNotBlank()) append("写作方向：$direction\n")
+            if (raw.isNotBlank()) append("\n$raw")
+        }.trim()
+    }
+
     private fun resolveDocumentById(referenceFileId: String?): Document? {
         if (referenceFileId.isNullOrBlank()) return null
         return runCatching { DocumentService.getDocumentById(referenceFileId) }
@@ -362,117 +400,90 @@ object GenerationService {
     }
 
     private suspend fun callWorkflowRunApi(runRequest: WorkflowRunRequest): String {
-        if (WORKFLOW_API_TOKEN.isBlank()) {
-            throw IllegalStateException("COZE_API_TOKEN (or COZE_API_KEY) is not set")
+        val runResponse = requestWorkflowRun(runRequest)
+        val finalDoc = runResponse.finalDocument?.trim().orEmpty()
+        if (finalDoc.isBlank()) {
+            throw IllegalStateException("Workflow API returned empty final_document")
         }
-        val response = httpClient.post(WORKFLOW_RUN_URL) {
-            headers {
-                append(HttpHeaders.Authorization, "Bearer $WORKFLOW_API_TOKEN")
-                append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
-            }
-            setBody(workflowJson.encodeToString(runRequest))
+        if (looksLikeEmptyTemplate(finalDoc)) {
+            throw IllegalStateException("Workflow API returned empty template")
         }
-        val responseBody = response.bodyAsText()
-        if (!response.status.isSuccess()) {
-            throw IllegalStateException("Workflow API request failed (${response.status.value}): ${extractWorkflowError(responseBody)}")
-        }
-        val runResponse = runCatching {
-            workflowJson.decodeFromString<WorkflowRunResponse>(responseBody)
-        }.getOrElse {
-            throw IllegalStateException("Workflow API response decode failed: ${it.message}; body=${responseBody.take(500)}")
-        }
-        return runResponse.finalDocument?.trim().takeUnless { it.isNullOrBlank() }
-            ?: throw IllegalStateException("Workflow API returned empty final_document; body=${responseBody.take(500)}")
+        return finalDoc
     }
 
     private suspend fun callWorkflowStreamRunApi(
         runRequest: WorkflowRunRequest,
         emitSseFrame: suspend (String) -> Unit
     ): String {
-        if (WORKFLOW_API_TOKEN.isBlank()) {
-            throw IllegalStateException("COZE_API_TOKEN (or COZE_API_KEY) is not set")
+        if (workflowForceSyncForStream()) {
+            emitSseFrame("event: message\ndata: ${workflowJson.encodeToString(mapOf("type" to "fallback", "reason" to "use_run_endpoint"))}\n\n")
         }
-        if (WORKFLOW_FORCE_SYNC_FOR_STREAM) {
-            emitSseFrame("event: message\ndata: ${workflowJson.encodeToString(mapOf("type" to "fallback", "reason" to "stream_disabled_use_run"))}\n\n")
-            return withHeartbeat(emitSseFrame) { callWorkflowRunApi(runRequest) }
-        }
-        val response = httpClient.post(WORKFLOW_STREAM_URL) {
-            headers {
-                append(HttpHeaders.Authorization, "Bearer $WORKFLOW_API_TOKEN")
-                append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
-                append(HttpHeaders.Accept, ContentType.Text.EventStream.toString())
+        val runResponse = withHeartbeat(emitSseFrame) { requestWorkflowRun(runRequest) }
+        val finalDocument = runResponse.finalDocument?.trim().orEmpty()
+        if (finalDocument.isBlank()) {
+            if (workflowStreamFallbackToRun()) {
+                return callWorkflowRunApi(runRequest)
             }
-            setBody(workflowJson.encodeToString(runRequest))
+            throw IllegalStateException("Workflow run completed without final_document")
         }
+        if (looksLikeEmptyTemplate(finalDocument)) {
+            throw IllegalStateException("Workflow run returned empty template")
+        }
+        val payload = workflowJson.encodeToString(
+            mapOf(
+                "final_document" to finalDocument,
+                "style_match_report" to runResponse.styleMatchReport,
+                "content_consistency_report" to runResponse.contentConsistencyReport,
+                "quality_report" to runResponse.qualityReport,
+                "run_id" to runResponse.runId
+            )
+        )
+        emitSseFrame("event: message\ndata: $payload\n\n")
+        return finalDocument
+    }
+
+    private fun looksLikeEmptyTemplate(text: String): Boolean {
+        val t = text.trim()
+        if (t.isBlank()) return true
+        return t.contains("# 最终文档") &&
+            t.contains("总字数：0") &&
+            t.contains("风格匹配度：0.0/100")
+    }
+
+    private fun encodeWorkflowRequestCompat(runRequest: WorkflowRunRequest): String {
+        return workflowJson.encodeToString(runRequest)
+    }
+
+    private suspend fun requestWorkflowRun(runRequest: WorkflowRunRequest): WorkflowRunResponse {
+        val token = workflowApiToken()
+        val requestBody = encodeWorkflowRequestCompat(runRequest)
+        val response = httpClient.post(workflowRunUrl()) {
+            if (token.isNotBlank()) {
+                header(HttpHeaders.Authorization, "Bearer $token")
+            }
+            contentType(ContentType.Application.Json)
+            accept(ContentType.Application.Json)
+            setBody(TextContent(requestBody, ContentType.Application.Json))
+        }
+        val responseBody = response.bodyAsText()
         if (!response.status.isSuccess()) {
-            val errorBody = response.bodyAsText()
-            throw IllegalStateException("Workflow stream request failed (${response.status.value}): ${extractWorkflowError(errorBody)}")
+            throw IllegalStateException("Workflow API request failed (${response.status.value}): ${extractWorkflowError(responseBody)}")
         }
-        val channel = response.bodyAsChannel()
-        var currentEvent = "message"
-        val dataLines = mutableListOf<String>()
-        var finalDocument = ""
-        var streamErrorMessage: String? = null
-        while (!channel.isClosedForRead) {
-            val line = channel.readUTF8Line() ?: break
-            when {
-                line.startsWith("event:") -> {
-                    currentEvent = line.removePrefix("event:").trim().ifBlank { "message" }
-                }
-                line.startsWith("data:") -> {
-                    dataLines.add(line.removePrefix("data:").trim())
-                }
-                line.isBlank() -> {
-                    if (dataLines.isNotEmpty()) {
-                        val payload = dataLines.joinToString("\n")
-                        emitSseFrame("event: $currentEvent\ndata: $payload\n\n")
-                        extractFinalDocument(payload)?.let { doc ->
-                            if (doc.isNotBlank()) {
-                                finalDocument = doc
-                            }
-                        }
-                        if (streamErrorMessage == null) {
-                            streamErrorMessage = extractStreamMessage(payload)
-                        }
-                        dataLines.clear()
-                        currentEvent = "message"
-                    }
-                }
+        return runCatching {
+            workflowJson.decodeFromString<WorkflowRunResponse>(responseBody)
+        }.getOrElse {
+            val root = runCatching { workflowJson.parseToJsonElement(responseBody) }.getOrNull()
+            val finalDocument = root?.let { findStringByKey(it, "final_document") }
+            if (!finalDocument.isNullOrBlank()) {
+                WorkflowRunResponse(finalDocument = finalDocument)
+            } else {
+                throw IllegalStateException("Workflow API response decode failed: ${it.message}; body=${responseBody.take(500)}")
             }
-        }
-        if (dataLines.isNotEmpty()) {
-            val payload = dataLines.joinToString("\n")
-            emitSseFrame("event: $currentEvent\ndata: $payload\n\n")
-            extractFinalDocument(payload)?.let { doc ->
-                if (doc.isNotBlank()) {
-                    finalDocument = doc
-                }
-            }
-            if (streamErrorMessage == null) {
-                streamErrorMessage = extractStreamMessage(payload)
-            }
-        }
-        return finalDocument.ifBlank {
-            if (WORKFLOW_STREAM_FALLBACK_TO_RUN) {
-                emitSseFrame(
-                    "event: message\ndata: ${
-                        workflowJson.encodeToString(
-                            mapOf(
-                                "type" to "fallback",
-                                "reason" to "stream_no_final_document",
-                                "detail" to (streamErrorMessage ?: "")
-                            )
-                        )
-                    }\n\n"
-                )
-                return@ifBlank withHeartbeat(emitSseFrame) { callWorkflowRunApi(runRequest) }
-            }
-            throw IllegalStateException("Workflow stream completed without final_document; message=${streamErrorMessage ?: "unknown"}")
         }
     }
 
     private fun parseEnvBoolean(name: String, defaultValue: Boolean): Boolean {
-        val value = System.getenv(name)?.trim()?.lowercase() ?: return defaultValue
+        val value = (System.getProperty(name) ?: System.getenv(name))?.trim()?.lowercase() ?: return defaultValue
         return when (value) {
             "1", "true", "yes", "on" -> true
             "0", "false", "no", "off" -> false
@@ -481,7 +492,7 @@ object GenerationService {
     }
 
     private fun parseEnvLong(name: String, defaultValue: Long): Long {
-        val raw = System.getenv(name)?.trim().orEmpty()
+        val raw = (System.getProperty(name) ?: System.getenv(name))?.trim().orEmpty()
         val value = raw.toLongOrNull()
         return if (value != null && value > 0) value else defaultValue
     }

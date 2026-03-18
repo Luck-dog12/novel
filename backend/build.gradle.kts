@@ -16,6 +16,7 @@ dependencies {
     implementation("io.ktor:ktor-server-core:2.2.4")
     implementation("io.ktor:ktor-server-netty:2.2.4")
     implementation("io.ktor:ktor-server-content-negotiation:2.2.4")
+    implementation("io.ktor:ktor-server-status-pages:2.2.4")
     implementation("io.ktor:ktor-serialization-kotlinx-json:2.2.4")
     implementation("io.ktor:ktor-client-core:2.2.4")
     implementation("io.ktor:ktor-client-okhttp:2.2.4")

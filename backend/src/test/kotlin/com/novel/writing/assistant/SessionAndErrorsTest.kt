@@ -18,6 +18,7 @@ class SessionAndErrorsTest {
     @Test
     fun `continuation without sessionId returns 400`() = testApplication {
         application app@{
+            WorkflowMockServer.configureClientProperties()
             this@app.install(io.ktor.server.plugins.contentnegotiation.ContentNegotiation) { json() }
             configureRouting()
         }
@@ -42,6 +43,7 @@ class SessionAndErrorsTest {
     @Test
     fun `continuation with sessionId but no context returns 409`() = testApplication {
         application app@{
+            WorkflowMockServer.configureClientProperties()
             this@app.install(io.ktor.server.plugins.contentnegotiation.ContentNegotiation) { json() }
             configureRouting()
         }
@@ -67,6 +69,7 @@ class SessionAndErrorsTest {
     @Test
     fun `latest session endpoint returns most recent sessionId`() = testApplication {
         application app@{
+            WorkflowMockServer.configureClientProperties()
             this@app.install(io.ktor.server.plugins.contentnegotiation.ContentNegotiation) { json() }
             configureRouting()
         }

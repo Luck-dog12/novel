@@ -1,14 +1,37 @@
 services:
+  coze-sdk-bridge:
+    build:
+      context: ./coze-sdk-bridge
+      dockerfile: Dockerfile
+    environment:
+      COZE_BRIDGE_PORT: 8787
+      COZE_API_BASE: ${COZE_API_BASE:-https://api.coze.cn}
+      COZE_OAUTH_CLIENT_ID: ${COZE_OAUTH_CLIENT_ID}
+      COZE_OAUTH_CLIENT_SECRET: ${COZE_OAUTH_CLIENT_SECRET}
+      COZE_OAUTH_REDIRECT_URL: ${COZE_OAUTH_REDIRECT_URL}
+      COZE_OAUTH_CODE: ${COZE_OAUTH_CODE:-}
+      COZE_OAUTH_EXPECTED_STATE: ${COZE_OAUTH_EXPECTED_STATE:-}
+      COZE_OAUTH_ACCESS_TOKEN: ${COZE_OAUTH_ACCESS_TOKEN:-}
+      COZE_OAUTH_REFRESH_TOKEN: ${COZE_OAUTH_REFRESH_TOKEN:-}
+      COZE_OAUTH_EXPIRES_AT: ${COZE_OAUTH_EXPIRES_AT:-0}
+      COZE_WORKFLOW_ID: ${COZE_WORKFLOW_ID}
+      COZE_BOT_ID: ${COZE_BOT_ID:-}
+      COZE_APP_ID: ${COZE_APP_ID:-}
+      COZE_BRIDGE_USER_ID: ${COZE_BRIDGE_USER_ID:-novel-backend}
+    restart: unless-stopped
+
   backend:
     build:
       context: .
       dockerfile: Dockerfile
+    depends_on:
+      - coze-sdk-bridge
     ports:
       - "8080:8080"
     environment:
-      COZE_API_BASE_URL: ${COZE_API_BASE_URL:-http://127.0.0.1:5000}
-      COZE_API_RUN_PATH: ${COZE_API_RUN_PATH:-/run}
-      COZE_API_STREAM_PATH: ${COZE_API_STREAM_PATH:-/stream_run}
+      COZE_BRIDGE_BASE_URL: ${COZE_BRIDGE_BASE_URL:-http://coze-sdk-bridge:8787}
+      COZE_BRIDGE_RUN_PATH: ${COZE_BRIDGE_RUN_PATH:-/run}
+      COZE_BRIDGE_STREAM_PATH: ${COZE_BRIDGE_STREAM_PATH:-/stream_run}
       COZE_FORCE_SYNC_FOR_STREAM: ${COZE_FORCE_SYNC_FOR_STREAM:-true}
       COZE_STREAM_FALLBACK_TO_RUN: ${COZE_STREAM_FALLBACK_TO_RUN:-true}
       ENABLE_MOCK_FALLBACK: ${ENABLE_MOCK_FALLBACK:-false}
@@ -16,9 +39,7 @@ services:
       COZE_REQUEST_TIMEOUT_MS: ${COZE_REQUEST_TIMEOUT_MS:-300000}
       COZE_SOCKET_TIMEOUT_MS: ${COZE_SOCKET_TIMEOUT_MS:-300000}
       STREAM_HEARTBEAT_INTERVAL_MS: ${STREAM_HEARTBEAT_INTERVAL_MS:-10000}
-      COZE_API_TOKEN: ${COZE_API_TOKEN:-}
-      COZE_API_KEY: ${COZE_API_KEY:-}
-      COZE_API_URL: ${COZE_API_URL:-}
+      COZE_BRIDGE_TOKEN: ${COZE_BRIDGE_TOKEN:-}
       APP_SECRET_KEY: ${APP_SECRET_KEY}
       REQUIRE_DB: ${REQUIRE_DB:-true}
       DB_URL: ${DB_URL}

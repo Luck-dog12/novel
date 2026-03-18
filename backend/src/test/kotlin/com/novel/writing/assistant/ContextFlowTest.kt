@@ -17,6 +17,7 @@ class ContextFlowTest {
     @Test
     fun `generation saves chapter context and is readable`() = testApplication {
         application app@{
+            WorkflowMockServer.configureClientProperties()
             this@app.install(io.ktor.server.plugins.contentnegotiation.ContentNegotiation) { json() }
             configureRouting()
         }

@@ -17,29 +17,52 @@ object DatabaseService {
 
             val requireDb = System.getenv("REQUIRE_DB")?.equals("true", true) == true
             val rawUrl = System.getenv("DB_URL")?.trim().orEmpty()
+            val user = System.getenv("DB_USER")?.trim().orEmpty().ifBlank { "sa" }
+            val password = System.getenv("DB_PASSWORD")?.trim().orEmpty()
+            val poolSize = (System.getenv("DB_POOL_SIZE")?.toIntOrNull() ?: 10).coerceAtLeast(1)
+            val h2Url = "jdbc:h2:mem:novel;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false"
             val url = rawUrl.ifBlank {
                 if (requireDb) {
                     throw IllegalStateException("DB_URL is required")
                 }
                 LogService.warn("DB_URL is blank, falling back to in-memory H2 database")
-                "jdbc:h2:mem:novel;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false"
+                h2Url
             }
-            val user = System.getenv("DB_USER")?.trim().orEmpty().ifBlank { "sa" }
-            val password = System.getenv("DB_PASSWORD")?.trim().orEmpty()
 
-            val hikariConfig = HikariConfig().apply {
-                jdbcUrl = url
-                username = user
-                this.password = password
-                maximumPoolSize = (System.getenv("DB_POOL_SIZE")?.toIntOrNull() ?: 10).coerceAtLeast(1)
-                isAutoCommit = true
-                addDataSourceProperty("cachePrepStmts", "true")
-                addDataSourceProperty("prepStmtCacheSize", "250")
-                addDataSourceProperty("prepStmtCacheSqlLimit", "2048")
+            val created = runCatching {
+                createDataSource(url = url, user = user, password = password, poolSize = poolSize, requireDb = requireDb)
+            }.getOrElse { firstError ->
+                if (requireDb) {
+                    throw firstError
+                }
+                LogService.warn("Database init failed, falling back to in-memory H2 database: ${firstError.message}")
+                createDataSource(url = h2Url, user = "sa", password = "", poolSize = poolSize, requireDb = false)
             }
-            dataSource = HikariDataSource(hikariConfig)
+
+            dataSource = created
             migrate()
         }
+    }
+
+    private fun createDataSource(
+        url: String,
+        user: String,
+        password: String,
+        poolSize: Int,
+        requireDb: Boolean
+    ): HikariDataSource {
+        val hikariConfig = HikariConfig().apply {
+            jdbcUrl = url
+            username = user
+            this.password = password
+            maximumPoolSize = poolSize
+            isAutoCommit = true
+            initializationFailTimeout = if (requireDb) 1 else -1
+            addDataSourceProperty("cachePrepStmts", "true")
+            addDataSourceProperty("prepStmtCacheSize", "250")
+            addDataSourceProperty("prepStmtCacheSqlLimit", "2048")
+        }
+        return HikariDataSource(hikariConfig)
     }
 
     private fun migrate() {
