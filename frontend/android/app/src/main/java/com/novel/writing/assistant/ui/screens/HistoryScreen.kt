@@ -26,6 +26,10 @@ fun HistoryScreen(
     var historyItems by remember { mutableStateOf<List<HistoryItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var deletingHistoryId by remember { mutableStateOf<String?>(null) }
+    var isDeletingAll by remember { mutableStateOf(false) }
+    var confirmDeleteItem by remember { mutableStateOf<HistoryItem?>(null) }
+    var showClearAllConfirm by remember { mutableStateOf(false) }
     
     // Load history when screen is composited
     LaunchedEffect(projectId, uiOnly) {
@@ -89,7 +93,12 @@ fun HistoryScreen(
                 fontSize = 20.sp,
                 fontWeight = MaterialTheme.typography.headlineSmall.fontWeight
             )
-            Box(modifier = Modifier.width(64.dp)) {}
+            TextButton(
+                onClick = { showClearAllConfirm = true },
+                enabled = historyItems.isNotEmpty() && !isLoading && !isDeletingAll && deletingHistoryId == null
+            ) {
+                Text(if (isDeletingAll) "清空中..." else "清空")
+            }
         }
         
         Spacer(modifier = Modifier.height(24.dp))
@@ -129,11 +138,105 @@ fun HistoryScreen(
                 items(historyItems) {
                     HistoryItemCard(
                         item = it,
-                        onClick = { onHistoryItemClick(it.outputContent) }
+                        isDeleting = deletingHistoryId == it.id,
+                        onClick = { onHistoryItemClick(it.outputContent) },
+                        onDeleteClick = { confirmDeleteItem = it }
                     )
                 }
             }
         }
+    }
+
+    confirmDeleteItem?.let { target ->
+        AlertDialog(
+            onDismissRequest = { if (deletingHistoryId == null) confirmDeleteItem = null },
+            confirmButton = {
+                TextButton(
+                    enabled = deletingHistoryId == null && !isDeletingAll,
+                    onClick = {
+                        scope.launch {
+                            deletingHistoryId = target.id
+                            errorMessage = null
+                            try {
+                                val success = if (uiOnly) {
+                                    true
+                                } else {
+                                    apiService.deleteHistoryById(target.id)
+                                }
+                                if (success) {
+                                    historyItems = historyItems.filterNot { it.id == target.id }
+                                } else {
+                                    errorMessage = "删除失败：未找到该记录"
+                                }
+                            } catch (e: Exception) {
+                                errorMessage = "删除失败：${e.message}"
+                            } finally {
+                                deletingHistoryId = null
+                                confirmDeleteItem = null
+                            }
+                        }
+                    }
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = deletingHistoryId == null && !isDeletingAll,
+                    onClick = { confirmDeleteItem = null }
+                ) {
+                    Text("取消")
+                }
+            },
+            title = { Text("删除历史记录") },
+            text = { Text("删除后不可恢复，是否继续？") }
+        )
+    }
+
+    if (showClearAllConfirm) {
+        AlertDialog(
+            onDismissRequest = { if (!isDeletingAll) showClearAllConfirm = false },
+            confirmButton = {
+                TextButton(
+                    enabled = !isDeletingAll && deletingHistoryId == null,
+                    onClick = {
+                        scope.launch {
+                            isDeletingAll = true
+                            errorMessage = null
+                            try {
+                                val success = if (uiOnly) {
+                                    true
+                                } else {
+                                    apiService.deleteHistoryByProjectId(projectId)
+                                }
+                                if (success) {
+                                    historyItems = emptyList()
+                                } else {
+                                    errorMessage = "清空失败：当前项目没有可删除记录"
+                                }
+                            } catch (e: Exception) {
+                                errorMessage = "清空失败：${e.message}"
+                            } finally {
+                                isDeletingAll = false
+                                showClearAllConfirm = false
+                            }
+                        }
+                    }
+                ) {
+                    Text("清空")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !isDeletingAll && deletingHistoryId == null,
+                    onClick = { showClearAllConfirm = false }
+                ) {
+                    Text("取消")
+                }
+            },
+            title = { Text("清空历史记录") },
+            text = { Text("将删除当前项目全部历史记录，且不可恢复，是否继续？") }
+        )
     }
 }
 
@@ -149,7 +252,9 @@ data class HistoryItem(
 @OptIn(ExperimentalMaterial3Api::class)
 fun HistoryItemCard(
     item: HistoryItem,
-    onClick: () -> Unit
+    isDeleting: Boolean,
+    onClick: () -> Unit,
+    onDeleteClick: () -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -172,11 +277,20 @@ fun HistoryItemCard(
                     fontWeight = MaterialTheme.typography.titleMedium.fontWeight,
                     color = MaterialTheme.colorScheme.primary
                 )
-                Text(
-                    text = item.timestamp,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = item.timestamp,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(
+                        onClick = onDeleteClick,
+                        enabled = !isDeleting
+                    ) {
+                        Text(if (isDeleting) "删除中..." else "删除")
+                    }
+                }
             }
             Spacer(modifier = Modifier.height(8.dp))
             Text(

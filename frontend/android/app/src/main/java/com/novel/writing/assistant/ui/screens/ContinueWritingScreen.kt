@@ -1,5 +1,8 @@
 package com.novel.writing.assistant.ui.screens
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -9,6 +12,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.novel.writing.assistant.network.ApiService
+import com.novel.writing.assistant.service.GenerationForegroundService
+import com.novel.writing.assistant.service.GenerationTaskState
+import com.novel.writing.assistant.service.GenerationTaskStore
 import com.novel.writing.assistant.ui.components.LoadingScreen
 import com.novel.writing.assistant.ui.components.ErrorScreen
 import com.novel.writing.assistant.utils.SessionIdStore
@@ -25,6 +31,8 @@ fun ContinueWritingScreen(
     val apiService = ApiService()
     val scope = rememberCoroutineScope()
     val sessionIdStore = remember(context) { SessionIdStore(context) }
+    val contextScrollState = rememberScrollState()
+    val taskState by GenerationTaskStore.state.collectAsState()
     
     var lastChapterContent by remember { mutableStateOf<String?>(null) }
     var isContextAvailable by remember { mutableStateOf(false) }
@@ -32,6 +40,39 @@ fun ContinueWritingScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var loadingMessage by remember { mutableStateOf("正在生成续写...") }
+    var activeRequestId by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(taskState, activeRequestId) {
+        val requestId = activeRequestId ?: return@LaunchedEffect
+        when (val state = taskState) {
+            is GenerationTaskState.Running -> {
+                if (state.requestId == requestId) {
+                    isLoading = true
+                    loadingMessage = state.statusMessage
+                }
+            }
+
+            is GenerationTaskState.Success -> {
+                if (state.requestId == requestId) {
+                    isLoading = false
+                    GenerationTaskStore.reset()
+                    activeRequestId = null
+                    onGenerationComplete(state.response.outputContent)
+                }
+            }
+
+            is GenerationTaskState.Failed -> {
+                if (state.requestId == requestId) {
+                    isLoading = false
+                    errorMessage = state.message
+                    GenerationTaskStore.reset()
+                    activeRequestId = null
+                }
+            }
+
+            GenerationTaskState.Idle -> {}
+        }
+    }
 
     LaunchedEffect(projectId, uiOnly) {
         if (uiOnly) {
@@ -102,14 +143,17 @@ fun ContinueWritingScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = lastChapterContent ?: "",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 120.dp)
-                )
+                SelectionContainer {
+                    Text(
+                        text = lastChapterContent ?: "",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 120.dp, max = 260.dp)
+                            .verticalScroll(contextScrollState)
+                    )
+                }
             }
         }
         
@@ -139,35 +183,19 @@ fun ContinueWritingScreen(
                             errorMessage = "未找到可用的会话信息，请先完成一次初始生成"
                             return@launch
                         }
-                        val result = apiService.generateContentStream(
+                        val requestId = GenerationForegroundService.start(
+                            context = context,
                             projectId = projectId,
                             isContinueWriting = true,
-                            referenceFileId = null,
                             referenceDoc = null,
                             genreType = null,
                             writingDirection = null,
                             sessionId = sessionId
-                        ) { event ->
-                            when (event.event) {
-                                "error" -> {
-                                    loadingMessage = "流式续写异常：${event.errorMessage ?: "未知错误"}"
-                                }
-                                "done" -> {
-                                    loadingMessage = "续写完成，正在整理结果..."
-                                }
-                                else -> {
-                                    event.partialOutput?.let { partial ->
-                                        if (partial.isNotBlank()) {
-                                            loadingMessage = "续写进行中（已接收 ${partial.length} 字）..."
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        onGenerationComplete(result.outputContent)
+                        )
+                        activeRequestId = requestId
+                        loadingMessage = "正在连接流式服务..."
                     } catch (e: Exception) {
                         errorMessage = "生成失败：${e.message}"
-                    } finally {
                         isLoading = false
                     }
                 }

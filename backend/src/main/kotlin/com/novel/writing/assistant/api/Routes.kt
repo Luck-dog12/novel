@@ -169,6 +169,24 @@ fun Application.configureRouting() {
                             if (projectId != null) HistoryService.getHistoryByProjectId(projectId) else HistoryService.getAllHistory()
                         )
                     }
+                    delete {
+                        val projectId = call.request.queryParameters["projectId"]
+                            ?: return@delete call.respond(HttpStatusCode.BadRequest, "Missing project ID")
+                        if (HistoryService.deleteHistoryByProjectId(projectId)) {
+                            call.respond(HttpStatusCode.NoContent)
+                        } else {
+                            call.respond(HttpStatusCode.NotFound, "History not found")
+                        }
+                    }
+                    delete("/{id}") {
+                        val id = call.parameters["id"]
+                            ?: return@delete call.respond(HttpStatusCode.BadRequest, "Missing history ID")
+                        if (HistoryService.deleteHistoryById(id)) {
+                            call.respond(HttpStatusCode.NoContent)
+                        } else {
+                            call.respond(HttpStatusCode.NotFound, "History not found")
+                        }
+                    }
                 }
 
                 route("/context") {

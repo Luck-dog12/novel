@@ -1,5 +1,8 @@
 package com.novel.writing.assistant.ui.screens
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -14,6 +17,7 @@ fun ResultScreen(
     onBackClick: () -> Unit,
     onRegenerateClick: () -> Unit
 ) {
+    val scrollState = rememberScrollState()
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -48,6 +52,7 @@ fun ResultScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(16.dp)
+                    .verticalScroll(scrollState)
             ) {
                 Text(
                     text = "生成的内容",
@@ -55,11 +60,13 @@ fun ResultScreen(
                     fontWeight = MaterialTheme.typography.titleMedium.fontWeight
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = generatedContent,
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp
-                )
+                SelectionContainer {
+                    Text(
+                        text = generatedContent,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp
+                    )
+                }
             }
         }
         

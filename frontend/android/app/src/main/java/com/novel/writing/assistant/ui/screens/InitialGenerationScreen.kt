@@ -14,13 +14,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.novel.writing.assistant.data.ReferenceDocument
-import com.novel.writing.assistant.network.ApiService
 import com.novel.writing.assistant.ui.components.LoadingScreen
 import com.novel.writing.assistant.ui.components.ErrorScreen
-import com.novel.writing.assistant.utils.SessionIdStore
+import com.novel.writing.assistant.service.GenerationForegroundService
+import com.novel.writing.assistant.service.GenerationTaskState
+import com.novel.writing.assistant.service.GenerationTaskStore
 import kotlinx.coroutines.launch
-import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,23 +31,53 @@ fun InitialGenerationScreen(
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
-    val apiService = ApiService()
     val scope = rememberCoroutineScope()
-    val sessionIdStore = remember(context) { SessionIdStore(context) }
     val scrollState = rememberScrollState()
+    val taskState by GenerationTaskStore.state.collectAsState()
     
     var selectedGenre by remember { mutableStateOf("小说") }
     var writingDirection by remember { mutableStateOf("") }
     var referenceDocText by remember { mutableStateOf("") }
     var selectedDocumentId by remember { mutableStateOf<String?>(null) }
     var selectedFileName by remember { mutableStateOf<String?>(null) }
-    var documents by remember { mutableStateOf<List<ReferenceDocument>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
     var isGenreExpanded by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var generationResult by remember { mutableStateOf<String?>(null) }
     var loadingMessage by remember { mutableStateOf("正在生成内容...") }
+    var activeRequestId by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(taskState, activeRequestId) {
+        val requestId = activeRequestId ?: return@LaunchedEffect
+        when (val state = taskState) {
+            is GenerationTaskState.Running -> {
+                if (state.requestId == requestId) {
+                    isLoading = true
+                    loadingMessage = state.statusMessage
+                }
+            }
+
+            is GenerationTaskState.Success -> {
+                if (state.requestId == requestId) {
+                    isLoading = false
+                    GenerationTaskStore.reset()
+                    activeRequestId = null
+                    onGenerationComplete(state.response.outputContent)
+                }
+            }
+
+            is GenerationTaskState.Failed -> {
+                if (state.requestId == requestId) {
+                    isLoading = false
+                    errorMessage = state.message
+                    GenerationTaskStore.reset()
+                    activeRequestId = null
+                }
+            }
+
+            GenerationTaskState.Idle -> {}
+        }
+    }
     
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -253,40 +282,22 @@ fun InitialGenerationScreen(
                     
                     try {
                         if (uiOnly) {
-                            generationResult = "（示例）初始生成结果：夜色落在屋檐上，风从巷口穿过，故事从一声叹息开始。"
-                            onGenerationComplete(generationResult ?: "")
+                            onGenerationComplete("（示例）初始生成结果：夜色落在屋檐上，风从巷口穿过，故事从一声叹息开始。")
                             return@launch
                         }
-                        val result = apiService.generateContentStream(
+                        val requestId = GenerationForegroundService.start(
+                            context = context,
                             projectId = projectId,
                             isContinueWriting = false,
-                            referenceFileId = null,
                             referenceDoc = referenceDocText.takeIf { it.isNotBlank() },
                             genreType = selectedGenre,
-                            writingDirection = writingDirection
-                        ) { event ->
-                            when (event.event) {
-                                "error" -> {
-                                    loadingMessage = "流式生成异常：${event.errorMessage ?: "未知错误"}"
-                                }
-                                "done" -> {
-                                    loadingMessage = "生成完成，正在整理结果..."
-                                }
-                                else -> {
-                                    event.partialOutput?.let { partial ->
-                                        if (partial.isNotBlank()) {
-                                            loadingMessage = "正在生成中（已接收 ${partial.length} 字）..."
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        sessionIdStore.saveSessionId(projectId, result.sessionId)
-                        generationResult = result.outputContent
-                        onGenerationComplete(result.outputContent)
+                            writingDirection = writingDirection,
+                            sessionId = null
+                        )
+                        activeRequestId = requestId
+                        loadingMessage = "正在连接流式服务..."
                     } catch (e: Exception) {
                         errorMessage = "生成失败：${e.message}"
-                    } finally {
                         isLoading = false
                     }
                 }

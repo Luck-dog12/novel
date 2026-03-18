@@ -15,6 +15,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import java.util.Date
+import java.util.UUID
 
 class ApiService {
     private val json = Json { ignoreUnknownKeys = true }
@@ -87,9 +89,13 @@ class ApiService {
             var currentEvent = "message"
             val dataLines = mutableListOf<String>()
             var finalResponse: GenerationResponse? = null
+            var latestPartialOutput: String? = null
 
             suspend fun handleFrame(eventName: String, payload: String) {
                 val partial = extractFinalDocument(payload)
+                if (!partial.isNullOrBlank()) {
+                    latestPartialOutput = partial
+                }
                 val error = if (eventName == "error") extractErrorMessage(payload) else null
                 onEvent(
                     GenerationStreamEvent(
@@ -104,30 +110,54 @@ class ApiService {
                 }
             }
 
-            while (!channel.isClosedForRead) {
-                val line = channel.readUTF8Line(65536) ?: break
-                when {
-                    line.startsWith("event:") -> {
-                        currentEvent = line.removePrefix("event:").trim().ifBlank { "message" }
-                    }
-                    line.startsWith("data:") -> {
-                        dataLines.add(line.removePrefix("data:").trim())
-                    }
-                    line.isBlank() -> {
-                        if (dataLines.isNotEmpty()) {
-                            val payload = dataLines.joinToString("\n")
-                            handleFrame(currentEvent, payload)
-                            dataLines.clear()
-                            currentEvent = "message"
+            try {
+                while (!channel.isClosedForRead) {
+                    val line = channel.readUTF8Line(65536) ?: break
+                    when {
+                        line.startsWith("event:") -> {
+                            currentEvent = line.removePrefix("event:").trim().ifBlank { "message" }
+                        }
+                        line.startsWith("data:") -> {
+                            dataLines.add(line.removePrefix("data:").trim())
+                        }
+                        line.isBlank() -> {
+                            if (dataLines.isNotEmpty()) {
+                                val payload = dataLines.joinToString("\n")
+                                handleFrame(currentEvent, payload)
+                                dataLines.clear()
+                                currentEvent = "message"
+                            }
                         }
                     }
                 }
+            } catch (_: Exception) {
             }
             if (dataLines.isNotEmpty()) {
                 val payload = dataLines.joinToString("\n")
                 handleFrame(currentEvent, payload)
             }
-            finalResponse ?: throw IllegalStateException("流式生成未返回完成事件")
+            finalResponse
+                ?: if (!latestPartialOutput.isNullOrBlank() && isContinueWriting && !sessionId.isNullOrBlank()) {
+                    GenerationResponse(
+                        id = UUID.randomUUID().toString(),
+                        projectId = projectId,
+                        sessionId = sessionId,
+                        generationType = "continuation",
+                        outputContent = latestPartialOutput!!,
+                        generationDate = Date().toString(),
+                        duration = 0
+                    )
+                } else {
+                    generateContent(
+                        projectId = projectId,
+                        isContinueWriting = isContinueWriting,
+                        referenceFileId = referenceFileId,
+                        referenceDoc = referenceDoc,
+                        genreType = genreType,
+                        writingDirection = writingDirection,
+                        sessionId = sessionId
+                    )
+                }
         }
     }
     
@@ -222,6 +252,24 @@ class ApiService {
                 parameter("projectId", projectId)
             }
             response.body()
+        }
+    }
+
+    suspend fun deleteHistoryById(id: String): Boolean {
+        return withContext(Dispatchers.IO) {
+            val baseUrl = ApiClient.getBaseUrl()
+            val response = ApiClient.client.delete("$baseUrl/v1/history/$id")
+            response.status.value in 200..299
+        }
+    }
+
+    suspend fun deleteHistoryByProjectId(projectId: String): Boolean {
+        return withContext(Dispatchers.IO) {
+            val baseUrl = ApiClient.getBaseUrl()
+            val response = ApiClient.client.delete("$baseUrl/v1/history") {
+                parameter("projectId", projectId)
+            }
+            response.status.value in 200..299
         }
     }
 
