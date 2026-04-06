@@ -19,6 +19,11 @@ import java.util.Date
 import java.util.UUID
 
 class ApiService {
+    companion object {
+        // Streaming responses may contain full novel content in a single SSE data line.
+        internal const val MAX_SSE_LINE_LENGTH = 4 * 1024 * 1024
+    }
+
     private val json = Json { ignoreUnknownKeys = true }
 
     data class GenerationStreamEvent(
@@ -86,8 +91,6 @@ class ApiService {
                 throw IllegalStateException("流式生成请求失败：${response.status.value} ${errorBody.take(400)}")
             }
             val channel = response.bodyAsChannel()
-            var currentEvent = "message"
-            val dataLines = mutableListOf<String>()
             var finalResponse: GenerationResponse? = null
             var latestPartialOutput: String? = null
 
@@ -111,30 +114,10 @@ class ApiService {
             }
 
             try {
-                while (!channel.isClosedForRead) {
-                    val line = channel.readUTF8Line(65536) ?: break
-                    when {
-                        line.startsWith("event:") -> {
-                            currentEvent = line.removePrefix("event:").trim().ifBlank { "message" }
-                        }
-                        line.startsWith("data:") -> {
-                            dataLines.add(line.removePrefix("data:").trim())
-                        }
-                        line.isBlank() -> {
-                            if (dataLines.isNotEmpty()) {
-                                val payload = dataLines.joinToString("\n")
-                                handleFrame(currentEvent, payload)
-                                dataLines.clear()
-                                currentEvent = "message"
-                            }
-                        }
-                    }
+                parseEventStream(channel) { eventName, payload ->
+                    handleFrame(eventName, payload)
                 }
             } catch (_: Exception) {
-            }
-            if (dataLines.isNotEmpty()) {
-                val payload = dataLines.joinToString("\n")
-                handleFrame(currentEvent, payload)
             }
             finalResponse
                 ?: if (!latestPartialOutput.isNullOrBlank() && isContinueWriting && !sessionId.isNullOrBlank()) {
@@ -244,6 +227,39 @@ class ApiService {
             }
         }
     }
+
+    internal suspend fun parseEventStream(
+        channel: io.ktor.utils.io.ByteReadChannel,
+        onFrame: suspend (eventName: String, payload: String) -> Unit
+    ) {
+        var currentEvent = "message"
+        val dataLines = mutableListOf<String>()
+
+        while (!channel.isClosedForRead) {
+            val line = channel.readUTF8Line(MAX_SSE_LINE_LENGTH) ?: break
+            when {
+                line.startsWith("event:") -> {
+                    currentEvent = line.removePrefix("event:").trim().ifBlank { "message" }
+                }
+
+                line.startsWith("data:") -> {
+                    dataLines.add(extractSseData(line))
+                }
+
+                line.isBlank() -> {
+                    if (dataLines.isNotEmpty()) {
+                        onFrame(currentEvent, dataLines.joinToString("\n"))
+                        dataLines.clear()
+                        currentEvent = "message"
+                    }
+                }
+            }
+        }
+
+        if (dataLines.isNotEmpty()) {
+            onFrame(currentEvent, dataLines.joinToString("\n"))
+        }
+    }
     
     suspend fun getHistoryByProjectId(projectId: String): List<GenerationHistory> {
         return withContext(Dispatchers.IO) {
@@ -311,6 +327,11 @@ class ApiService {
         val element = runCatching { json.parseToJsonElement(payload) }.getOrNull() ?: return null
         return findStringByKey(element, "final_document")
             ?: findStringByKey(element, "content")
+    }
+
+    private fun extractSseData(line: String): String {
+        val raw = line.removePrefix("data:")
+        return if (raw.startsWith(" ")) raw.drop(1) else raw
     }
 
     private fun findStringByKey(element: JsonElement, key: String): String? {
