@@ -64,23 +64,26 @@ class GenerationForegroundService : Service() {
 
             ACTION_START -> {
                 val requestId = intent.getStringExtra(EXTRA_REQUEST_ID).orEmpty()
-                val projectId = intent.getStringExtra(EXTRA_PROJECT_ID).orEmpty()
-                val isContinueWriting = intent.getBooleanExtra(EXTRA_IS_CONTINUE_WRITING, false)
-                if (requestId.isBlank() || projectId.isBlank()) {
+                if (requestId.isBlank()) {
                     stopSelf()
                     return START_NOT_STICKY
                 }
                 startForeground(NOTIFICATION_ID, createNotification("正在准备生成任务..."))
                 serviceScope.launch {
-                    runGeneration(
-                        requestId = requestId,
-                        projectId = projectId,
-                        isContinueWriting = isContinueWriting,
-                        referenceDoc = intent.getStringExtra(EXTRA_REFERENCE_DOC),
-                        genreType = intent.getStringExtra(EXTRA_GENRE_TYPE),
-                        writingDirection = intent.getStringExtra(EXTRA_WRITING_DIRECTION),
-                        sessionId = intent.getStringExtra(EXTRA_SESSION_ID)
-                    )
+                    try {
+                        val request = GenerationRequestStore.load(this@GenerationForegroundService, requestId)
+                        if (request == null) {
+                            val message = "未找到生成请求，请重新提交"
+                            GenerationTaskStore.update(GenerationTaskState.Failed(requestId, message))
+                            updateNotification(message)
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                            stopSelf()
+                            return@launch
+                        }
+                        runGeneration(requestId = requestId, request = request)
+                    } finally {
+                        GenerationRequestStore.delete(this@GenerationForegroundService, requestId)
+                    }
                 }
             }
         }
@@ -89,24 +92,19 @@ class GenerationForegroundService : Service() {
 
     private suspend fun runGeneration(
         requestId: String,
-        projectId: String,
-        isContinueWriting: Boolean,
-        referenceDoc: String?,
-        genreType: String?,
-        writingDirection: String?,
-        sessionId: String?
+        request: PendingGenerationRequest
     ) {
         try {
             GenerationTaskStore.update(GenerationTaskState.Running(requestId, "正在连接流式服务..."))
             updateNotification("正在连接流式服务...")
             val result = apiService.generateContentStream(
-                projectId = projectId,
-                isContinueWriting = isContinueWriting,
+                projectId = request.projectId,
+                isContinueWriting = request.isContinueWriting,
                 referenceFileId = null,
-                referenceDoc = referenceDoc,
-                genreType = genreType,
-                writingDirection = writingDirection,
-                sessionId = sessionId
+                referenceDoc = request.referenceDoc,
+                genreType = request.genreType,
+                writingDirection = request.writingDirection,
+                sessionId = request.sessionId
             ) { event ->
                 when (event.event) {
                     "error" -> {
@@ -129,7 +127,7 @@ class GenerationForegroundService : Service() {
                     }
                 }
             }
-            SessionIdStore(this).saveSessionId(projectId, result.sessionId)
+            SessionIdStore(this).saveSessionId(request.projectId, result.sessionId)
             GenerationTaskStore.update(GenerationTaskState.Success(requestId, result))
             updateNotification("任务已完成")
         } catch (e: Exception) {
@@ -178,12 +176,6 @@ class GenerationForegroundService : Service() {
         private const val ACTION_CANCEL = "com.novel.writing.assistant.action.CANCEL_GENERATION"
 
         private const val EXTRA_REQUEST_ID = "extra_request_id"
-        private const val EXTRA_PROJECT_ID = "extra_project_id"
-        private const val EXTRA_IS_CONTINUE_WRITING = "extra_is_continue_writing"
-        private const val EXTRA_REFERENCE_DOC = "extra_reference_doc"
-        private const val EXTRA_GENRE_TYPE = "extra_genre_type"
-        private const val EXTRA_WRITING_DIRECTION = "extra_writing_direction"
-        private const val EXTRA_SESSION_ID = "extra_session_id"
 
         fun start(
             context: Context,
@@ -196,20 +188,31 @@ class GenerationForegroundService : Service() {
         ): String {
             createChannel(context)
             val requestId = UUID.randomUUID().toString()
+            GenerationRequestStore.stage(
+                context = context,
+                requestId = requestId,
+                request = PendingGenerationRequest(
+                    projectId = projectId,
+                    isContinueWriting = isContinueWriting,
+                    referenceDoc = referenceDoc,
+                    genreType = genreType,
+                    writingDirection = writingDirection,
+                    sessionId = sessionId
+                )
+            )
             val intent = Intent(context, GenerationForegroundService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_REQUEST_ID, requestId)
-                putExtra(EXTRA_PROJECT_ID, projectId)
-                putExtra(EXTRA_IS_CONTINUE_WRITING, isContinueWriting)
-                putExtra(EXTRA_REFERENCE_DOC, referenceDoc)
-                putExtra(EXTRA_GENRE_TYPE, genreType)
-                putExtra(EXTRA_WRITING_DIRECTION, writingDirection)
-                putExtra(EXTRA_SESSION_ID, sessionId)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                GenerationRequestStore.delete(context, requestId)
+                throw e
             }
             return requestId
         }
