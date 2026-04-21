@@ -316,6 +316,24 @@ class ApiService {
         }
     }
 
+    suspend fun acknowledgeGenerationReceived(
+        generationId: String,
+        receipt: GenerationReceiptRequest
+    ): GenerationReceiptConfirmation {
+        return withContext(Dispatchers.IO) {
+            val baseUrl = ApiClient.getBaseUrl()
+            val response = ApiClient.client.post("$baseUrl/v1/generation/$generationId/receipt") {
+                contentType(ContentType.Application.Json)
+                setBody(receipt)
+            }
+            if (!response.status.isSuccess()) {
+                val errorBody = response.bodyAsText()
+                throw IllegalStateException("鐢熸垚缁撴灉鍥炴墽澶辫触锛?{response.status.value} ${errorBody.take(400)}")
+            }
+            response.body<GenerationReceiptConfirmation>()
+        }
+    }
+
     private fun extractErrorMessage(payload: String): String? {
         val element = runCatching { json.parseToJsonElement(payload) }.getOrNull() ?: return payload
         return findStringByKey(element, "message")
@@ -438,6 +456,25 @@ data class ContextInfo(
 data class SessionInfo(
     val projectId: String,
     val sessionId: String
+)
+
+@Serializable
+data class GenerationReceiptRequest(
+    val projectId: String,
+    val sessionId: String,
+    val contentLength: Int,
+    val storageRef: String? = null
+)
+
+@Serializable
+data class GenerationReceiptConfirmation(
+    val generationId: String,
+    val projectId: String,
+    val sessionId: String,
+    val acknowledged: Boolean,
+    val clientReceivedAt: String,
+    val contentLength: Int,
+    val storageRef: String? = null
 )
 
 @Serializable

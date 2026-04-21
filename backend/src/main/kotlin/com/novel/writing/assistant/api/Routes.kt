@@ -11,12 +11,14 @@ import kotlinx.serialization.json.Json
 import com.novel.writing.assistant.model.ContextInfoCreate
 import com.novel.writing.assistant.model.ConfigRequest
 import com.novel.writing.assistant.model.GenerationRequest
+import com.novel.writing.assistant.model.GenerationReceiptRequest
 import com.novel.writing.assistant.model.ProjectCreateRequest
 import com.novel.writing.assistant.model.ProjectUpdateRequest
 import com.novel.writing.assistant.model.SessionInfo
 import com.novel.writing.assistant.service.ContextService
 import com.novel.writing.assistant.service.ConfigService
 import com.novel.writing.assistant.service.DocumentService
+import com.novel.writing.assistant.service.GenerationReceiptService
 import com.novel.writing.assistant.service.GenerationService
 import com.novel.writing.assistant.service.HistoryService
 import com.novel.writing.assistant.service.MissingSessionIdException
@@ -157,6 +159,18 @@ fun Application.configureRouting() {
                                 write("event: error\ndata: ${Json.encodeToString(mapOf("message" to (e.message ?: "stream generation failed")))}\n\n")
                                 flush()
                             }
+                        }
+                    }
+                    post("/{id}/receipt") {
+                        val generationId = call.parameters["id"]
+                            ?: return@post call.respond(HttpStatusCode.BadRequest, "Missing generation ID")
+                        try {
+                            val receipt = call.receive<GenerationReceiptRequest>()
+                            val response = GenerationReceiptService.acknowledge(generationId, receipt)
+                                ?: return@post call.respond(HttpStatusCode.NotFound, "Generation not found")
+                            call.respond(response)
+                        } catch (e: IllegalArgumentException) {
+                            call.respond(HttpStatusCode.BadRequest, e.message ?: "Invalid generation receipt")
                         }
                     }
                 }

@@ -2,6 +2,7 @@ package com.novel.writing.assistant
 
 import com.novel.writing.assistant.api.configureRouting
 import com.novel.writing.assistant.model.ContextInfo
+import com.novel.writing.assistant.model.GenerationReceiptRequest
 import com.novel.writing.assistant.model.GenerationRequest
 import com.novel.writing.assistant.model.GenerationResponse
 import io.ktor.client.call.*
@@ -40,6 +41,18 @@ class ContextFlowTest {
             )
         }.body<GenerationResponse>()
 
+        client.post("/api/v1/generation/${generationResponse.id}/receipt") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                GenerationReceiptRequest(
+                    projectId = generationResponse.projectId,
+                    sessionId = generationResponse.sessionId,
+                    contentLength = generationResponse.outputContent.length,
+                    storageRef = "tests/${generationResponse.id}.json"
+                )
+            )
+        }
+
         val contextsAfterInitial = client.get("/api/v1/context") {
             parameter("projectId", projectId)
             parameter("sessionId", generationResponse.sessionId)
@@ -55,7 +68,7 @@ class ContextFlowTest {
         assertTrue(contextsAfterInitial.any { it.contextType == "world" })
         assertTrue(contextsAfterInitial.any { it.contextType == "plot_outline" })
 
-        client.post("/api/v1/generation") {
+        val continuationResponse = client.post("/api/v1/generation") {
             contentType(ContentType.Application.Json)
             setBody(
                 GenerationRequest(
@@ -67,6 +80,18 @@ class ContextFlowTest {
                 )
             )
         }.body<GenerationResponse>()
+
+        client.post("/api/v1/generation/${continuationResponse.id}/receipt") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                GenerationReceiptRequest(
+                    projectId = continuationResponse.projectId,
+                    sessionId = continuationResponse.sessionId,
+                    contentLength = continuationResponse.outputContent.length,
+                    storageRef = "tests/${continuationResponse.id}.json"
+                )
+            )
+        }
 
         val contextsAfterContinuation = client.get("/api/v1/context") {
             parameter("projectId", projectId)

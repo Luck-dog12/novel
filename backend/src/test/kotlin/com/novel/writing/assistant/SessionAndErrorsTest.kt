@@ -1,6 +1,7 @@
 package com.novel.writing.assistant
 
 import com.novel.writing.assistant.api.configureRouting
+import com.novel.writing.assistant.model.GenerationReceiptRequest
 import com.novel.writing.assistant.model.GenerationRequest
 import com.novel.writing.assistant.model.GenerationResponse
 import com.novel.writing.assistant.model.SessionInfo
@@ -90,6 +91,18 @@ class SessionAndErrorsTest {
                 )
             )
         }.body<GenerationResponse>()
+
+        client.post("/api/v1/generation/${generationResponse.id}/receipt") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                GenerationReceiptRequest(
+                    projectId = generationResponse.projectId,
+                    sessionId = generationResponse.sessionId,
+                    contentLength = generationResponse.outputContent.length,
+                    storageRef = "tests/${generationResponse.id}.json"
+                )
+            )
+        }
 
         val sessionInfo = client.get("/api/v1/sessions/latest") {
             parameter("projectId", projectId)

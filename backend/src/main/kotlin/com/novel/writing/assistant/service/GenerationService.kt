@@ -186,14 +186,11 @@ object GenerationService {
             duration = duration
         )
         
-        persistGenerationData(
+        GenerationReceiptService.stagePending(
             request = request,
-            sessionId = sessionId,
-            generationType = generationType,
-            outputContent = outputContent,
-            duration = duration
+            response = response
         )
-        
+
         return response
     }
 
@@ -244,12 +241,9 @@ object GenerationService {
             generationDate = Date().toString(),
             duration = duration
         )
-        persistGenerationData(
+        GenerationReceiptService.stagePending(
             request = request,
-            sessionId = sessionId,
-            generationType = generationType,
-            outputContent = outputContent,
-            duration = duration
+            response = response
         )
         return response
     }
@@ -575,7 +569,7 @@ object GenerationService {
         return null
     }
 
-    private fun persistGenerationData(
+    internal fun persistGenerationData(
         request: GenerationRequest,
         sessionId: String,
         generationType: String,
@@ -661,6 +655,7 @@ object GenerationService {
                     "operation" to "saveHistoryAndContext"
                 )
             )
+            throw IllegalStateException("Failed to persist generation result for project ${request.projectId}", e)
         }
     }
 

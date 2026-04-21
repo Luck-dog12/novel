@@ -40,6 +40,25 @@ data class GenerationResponse(
 )
 
 @Serializable
+data class GenerationReceiptRequest(
+    val projectId: String,
+    val sessionId: String,
+    val contentLength: Int,
+    val storageRef: String? = null
+)
+
+@Serializable
+data class GenerationReceiptResponse(
+    val generationId: String,
+    val projectId: String,
+    val sessionId: String,
+    val acknowledged: Boolean,
+    val clientReceivedAt: String,
+    val contentLength: Int,
+    val storageRef: String? = null
+)
+
+@Serializable
 data class ConfigRequest(
     val projectId: String,
     val genreType: String,

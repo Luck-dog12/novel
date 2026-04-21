@@ -8,9 +8,11 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.novel.writing.assistant.MainActivity
 import com.novel.writing.assistant.network.ApiService
+import com.novel.writing.assistant.network.GenerationReceiptRequest
 import com.novel.writing.assistant.network.GenerationResponse
 import com.novel.writing.assistant.utils.SessionIdStore
 import kotlinx.coroutines.CoroutineScope
@@ -95,6 +97,7 @@ class GenerationForegroundService : Service() {
         request: PendingGenerationRequest
     ) {
         try {
+            flushPendingReceipts()
             GenerationTaskStore.update(GenerationTaskState.Running(requestId, "正在连接流式服务..."))
             updateNotification("正在连接流式服务...")
             val result = apiService.generateContentStream(
@@ -114,8 +117,9 @@ class GenerationForegroundService : Service() {
                     }
 
                     "done" -> {
-                        GenerationTaskStore.update(GenerationTaskState.Running(requestId, "生成完成，正在整理结果..."))
-                        updateNotification("生成完成，正在整理结果...")
+                        val message = "生成完成，正在保存结果..."
+                        GenerationTaskStore.update(GenerationTaskState.Running(requestId, message))
+                        updateNotification(message)
                     }
 
                     else -> {
@@ -127,6 +131,8 @@ class GenerationForegroundService : Service() {
                     }
                 }
             }
+            val storageRef = GenerationResultStore.save(this, result)
+            stageAndFlushReceipt(result, storageRef)
             SessionIdStore(this).saveSessionId(request.projectId, result.sessionId)
             GenerationTaskStore.update(GenerationTaskState.Success(requestId, result))
             updateNotification("任务已完成")
@@ -137,6 +143,37 @@ class GenerationForegroundService : Service() {
         } finally {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
+        }
+    }
+
+    private suspend fun stageAndFlushReceipt(result: GenerationResponse, storageRef: String) {
+        GenerationReceiptStore.stage(
+            context = this,
+            pendingReceipt = PendingGenerationReceipt(
+                generationId = result.id,
+                receipt = GenerationReceiptRequest(
+                    projectId = result.projectId,
+                    sessionId = result.sessionId,
+                    contentLength = result.outputContent.length,
+                    storageRef = storageRef
+                )
+            )
+        )
+        flushPendingReceipts()
+    }
+
+    private suspend fun flushPendingReceipts() {
+        GenerationReceiptStore.loadAll(this).forEach { pendingReceipt ->
+            runCatching {
+                apiService.acknowledgeGenerationReceived(
+                    generationId = pendingReceipt.generationId,
+                    receipt = pendingReceipt.receipt
+                )
+            }.onSuccess {
+                GenerationReceiptStore.delete(this, pendingReceipt.generationId)
+            }.onFailure { error ->
+                Log.w(TAG, "Failed to flush generation receipt ${pendingReceipt.generationId}: ${error.message}")
+            }
         }
     }
 
@@ -168,6 +205,7 @@ class GenerationForegroundService : Service() {
     }
 
     companion object {
+        private const val TAG = "GenerationService"
         private const val CHANNEL_ID = "generation_foreground_channel"
         private const val CHANNEL_NAME = "生成任务"
         private const val NOTIFICATION_ID = 1001

@@ -7,6 +7,8 @@ import java.sql.ResultSet
 import java.time.Instant
 
 object DatabaseService {
+    private const val LARGE_TEXT_TYPE = "LONGTEXT"
+
     @Volatile
     private var dataSource: HikariDataSource? = null
 
@@ -88,8 +90,8 @@ object DatabaseService {
                         id VARCHAR(36) PRIMARY KEY,
                         project_id VARCHAR(36) NOT NULL,
                         generation_type VARCHAR(50) NOT NULL,
-                        input_params TEXT NOT NULL,
-                        output_content TEXT NOT NULL,
+                        input_params $LARGE_TEXT_TYPE NOT NULL,
+                        output_content $LARGE_TEXT_TYPE NOT NULL,
                         generation_date VARCHAR(64) NOT NULL,
                         duration BIGINT NOT NULL
                     )
@@ -129,10 +131,67 @@ object DatabaseService {
                         project_id VARCHAR(36) NOT NULL,
                         session_id VARCHAR(36) NOT NULL,
                         context_type VARCHAR(100) NOT NULL,
-                        context_content TEXT NOT NULL,
+                        context_content $LARGE_TEXT_TYPE NOT NULL,
                         last_updated VARCHAR(64) NOT NULL
                     )
                     """.trimIndent()
+                )
+                statement.executeUpdate(
+                    """
+                    CREATE TABLE IF NOT EXISTS generation_receipts (
+                        generation_id VARCHAR(36) PRIMARY KEY,
+                        project_id VARCHAR(36) NOT NULL,
+                        session_id VARCHAR(36) NOT NULL,
+                        content_length INT NOT NULL,
+                        storage_ref TEXT,
+                        client_received_at VARCHAR(64) NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                statement.executeUpdate(
+                    """
+                    CREATE TABLE IF NOT EXISTS pending_generations (
+                        generation_id VARCHAR(36) PRIMARY KEY,
+                        project_id VARCHAR(36) NOT NULL,
+                        session_id VARCHAR(36) NOT NULL,
+                        generation_type VARCHAR(50) NOT NULL,
+                        request_payload $LARGE_TEXT_TYPE NOT NULL,
+                        output_content $LARGE_TEXT_TYPE NOT NULL,
+                        generation_date VARCHAR(64) NOT NULL,
+                        duration BIGINT NOT NULL,
+                        created_at VARCHAR(64) NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                ensureLargeTextColumn(
+                    statement = statement,
+                    table = "generation_history",
+                    column = "input_params",
+                    nullable = false
+                )
+                ensureLargeTextColumn(
+                    statement = statement,
+                    table = "generation_history",
+                    column = "output_content",
+                    nullable = false
+                )
+                ensureLargeTextColumn(
+                    statement = statement,
+                    table = "context_entries",
+                    column = "context_content",
+                    nullable = false
+                )
+                ensureLargeTextColumn(
+                    statement = statement,
+                    table = "pending_generations",
+                    column = "request_payload",
+                    nullable = false
+                )
+                ensureLargeTextColumn(
+                    statement = statement,
+                    table = "pending_generations",
+                    column = "output_content",
+                    nullable = false
                 )
                 try {
                     statement.executeUpdate(
@@ -147,6 +206,24 @@ object DatabaseService {
                 } catch (_: Exception) {
                 }
             }
+        }
+    }
+
+    private fun ensureLargeTextColumn(
+        statement: java.sql.Statement,
+        table: String,
+        column: String,
+        nullable: Boolean
+    ) {
+        val nullability = if (nullable) "" else " NOT NULL"
+        val attempts = listOf(
+            "ALTER TABLE $table MODIFY COLUMN $column $LARGE_TEXT_TYPE$nullability",
+            "ALTER TABLE $table ALTER COLUMN $column SET DATA TYPE $LARGE_TEXT_TYPE",
+            "ALTER TABLE $table ALTER COLUMN $column $LARGE_TEXT_TYPE"
+        )
+        attempts.forEach { sql ->
+            runCatching { statement.executeUpdate(sql) }
+                .onSuccess { return }
         }
     }
 
