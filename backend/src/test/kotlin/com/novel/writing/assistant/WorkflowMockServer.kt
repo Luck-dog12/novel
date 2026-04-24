@@ -60,14 +60,21 @@ object WorkflowMockServer {
                         val referenceDoc = root["reference_doc"]?.jsonPrimitive?.content.orEmpty()
                         val writingDirection = root["writing_direction"]?.jsonPrimitive?.content.orEmpty()
                         val finalDoc = "# 最终文档\n\n$writingDirection\n\n${referenceDoc.take(120)}"
+                        val chunks = finalDoc.chunked(24)
                         val sse = buildString {
                             append("event: message\n")
                             append("data: ")
-                            append(json.encodeToString(mapOf("final_document" to finalDoc)))
+                            append(json.encodeToString(mapOf("type" to "node_start", "node_name" to "workflow")))
                             append("\n\n")
-                            append("event: message\n")
+                            chunks.forEachIndexed { index, chunk ->
+                                append("event: content_chunk\n")
+                                append("data: ")
+                                append("""{"chunk":${json.encodeToString(chunk)},"chunkIndex":$index,"chunkCount":0}""")
+                                append("\n\n")
+                            }
+                            append("event: done\n")
                             append("data: ")
-                            append(json.encodeToString(mapOf("message" to "success")))
+                            append("""{"chunk_count":${chunks.size},"content_length":${finalDoc.length}}""")
                             append("\n\n")
                         }
                         call.respondText(sse, ContentType.Text.EventStream, HttpStatusCode.OK)

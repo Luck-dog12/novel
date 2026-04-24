@@ -116,7 +116,7 @@ class GenerationForegroundService : Service() {
                         updateNotification(message)
                     }
 
-                    "done" -> {
+                    "done", "result_meta" -> {
                         val message = "生成完成，正在保存结果..."
                         GenerationTaskStore.update(GenerationTaskState.Running(requestId, message))
                         updateNotification(message)
@@ -132,9 +132,18 @@ class GenerationForegroundService : Service() {
                 }
             }
             val storageRef = GenerationResultStore.save(this, result)
-            stageAndFlushReceipt(result, storageRef)
-            SessionIdStore(this).saveSessionId(request.projectId, result.sessionId)
+            GenerationResultRecoveryStore.stage(this, result.id)
             GenerationTaskStore.update(GenerationTaskState.Success(requestId, result))
+            runCatching {
+                SessionIdStore(this).saveSessionId(request.projectId, result.sessionId)
+            }.onFailure { error ->
+                Log.w(TAG, "Failed to save sessionId for ${request.projectId}: ${error.message}")
+            }
+            runCatching {
+                stageAndFlushReceipt(result, storageRef)
+            }.onFailure { error ->
+                Log.w(TAG, "Failed to stage generation receipt ${result.id}: ${error.message}")
+            }
             updateNotification("任务已完成")
         } catch (e: Exception) {
             val message = "生成失败：${e.message}"

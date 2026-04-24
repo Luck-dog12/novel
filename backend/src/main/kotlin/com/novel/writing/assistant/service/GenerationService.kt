@@ -15,6 +15,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.decodeFromString
@@ -74,11 +76,34 @@ data class WorkflowErrorResponse(
     val detail: WorkflowErrorDetail? = null
 )
 
+@Serializable
+data class GenerationStreamResultMeta(
+    val id: String,
+    val projectId: String,
+    val sessionId: String,
+    val generationType: String,
+    val generationDate: String,
+    val duration: Long
+)
+
+@Serializable
+data class GenerationStreamContentChunk(
+    val chunk: String,
+    val chunkIndex: Int,
+    val chunkCount: Int
+)
+
 object GenerationService {
     private val COZE_CONNECT_TIMEOUT_MS = parseEnvLong("COZE_CONNECT_TIMEOUT_MS", defaultValue = 15_000)
     private val COZE_REQUEST_TIMEOUT_MS = parseEnvLong("COZE_REQUEST_TIMEOUT_MS", defaultValue = 300_000)
     private val COZE_SOCKET_TIMEOUT_MS = parseEnvLong("COZE_SOCKET_TIMEOUT_MS", defaultValue = 300_000)
     private val STREAM_HEARTBEAT_INTERVAL_MS = parseEnvLong("STREAM_HEARTBEAT_INTERVAL_MS", defaultValue = 10_000)
+    private val STREAM_CONTENT_CHUNK_SIZE = parseEnvLong("STREAM_CONTENT_CHUNK_SIZE", defaultValue = 32_768L)
+        .toInt()
+        .coerceAtLeast(1_024)
+    private val STREAM_SSE_LINE_LENGTH = parseEnvLong("STREAM_SSE_LINE_LENGTH", defaultValue = 16_777_216L)
+        .toInt()
+        .coerceAtLeast(4_096)
     private val httpClient = HttpClient(OkHttp) {
         install(HttpTimeout) {
             requestTimeoutMillis = COZE_REQUEST_TIMEOUT_MS
@@ -133,6 +158,24 @@ object GenerationService {
     private fun workflowRunUrl(): String {
         val base = workflowApiBaseUrl()
         val path = workflowRunPath()
+        return "$base${if (path.startsWith("/")) path else "/$path"}"
+    }
+
+    private fun workflowStreamPath(): String {
+        return (
+            System.getProperty("COZE_WORKFLOW_STREAM_PATH")
+                ?: System.getenv("COZE_WORKFLOW_STREAM_PATH")
+                ?: System.getProperty("COZE_BRIDGE_STREAM_PATH")
+                ?: System.getenv("COZE_BRIDGE_STREAM_PATH")
+                ?: System.getProperty("COZE_API_STREAM_PATH")
+                ?: System.getenv("COZE_API_STREAM_PATH")
+                ?: "/stream_run"
+            ).trim().ifBlank { "/stream_run" }
+    }
+
+    private fun workflowStreamUrl(): String {
+        val base = workflowApiBaseUrl()
+        val path = workflowStreamPath()
         return "$base${if (path.startsWith("/")) path else "/$path"}"
     }
 
@@ -199,6 +242,12 @@ object GenerationService {
         emitSseFrame: suspend (String) -> Unit
     ): GenerationResponse {
         val startTime = System.currentTimeMillis()
+        val frameMutex = Mutex()
+        suspend fun emitSerializedFrame(frame: String) {
+            frameMutex.withLock {
+                emitSseFrame(frame)
+            }
+        }
         val sessionId = if (request.isContinueWriting) {
             request.sessionId?.takeIf { it.isNotBlank() }
                 ?: throw MissingSessionIdException()
@@ -208,9 +257,9 @@ object GenerationService {
         val generationType = if (request.isContinueWriting) "continuation" else "initial"
         val outputContent = try {
             if (request.isContinueWriting) {
-                generateContinuationStream(request, sessionId, emitSseFrame)
+                generateContinuationStream(request, sessionId, ::emitSerializedFrame)
             } else {
-                generateInitialStream(request, emitSseFrame)
+                generateInitialStream(request, ::emitSerializedFrame)
             }
         } catch (e: Exception) {
             if (e is MissingSessionIdException || e is NoContextException) {
@@ -225,7 +274,7 @@ object GenerationService {
                 )
             )
             if (enableMockFallback()) {
-                emitSseFrame("event: error\ndata: ${workflowJson.encodeToString(mapOf("message" to (e.message ?: "stream generation failed")))}\n\n")
+                emitSerializedFrame("event: error\ndata: ${workflowJson.encodeToString(mapOf("message" to (e.message ?: "stream generation failed")))}\n\n")
                 mockGenerationContent(request.isContinueWriting)
             } else {
                 throw e
@@ -244,6 +293,20 @@ object GenerationService {
         GenerationReceiptService.stagePending(
             request = request,
             response = response
+        )
+        emitSerializedFrame(
+            "event: result_meta\ndata: ${
+                workflowJson.encodeToString(
+                    GenerationStreamResultMeta(
+                        id = response.id,
+                        projectId = response.projectId,
+                        sessionId = response.sessionId,
+                        generationType = response.generationType,
+                        generationDate = response.generationDate,
+                        duration = response.duration
+                    )
+                )
+            }\n\n"
         )
         return response
     }
@@ -411,29 +474,313 @@ object GenerationService {
     ): String {
         if (workflowForceSyncForStream()) {
             emitSseFrame("event: message\ndata: ${workflowJson.encodeToString(mapOf("type" to "fallback", "reason" to "use_run_endpoint"))}\n\n")
+            return requestWorkflowRunWithChunkedFallback(runRequest, emitSseFrame)
         }
-        val runResponse = withHeartbeat(emitSseFrame) { requestWorkflowRun(runRequest) }
-        val finalDocument = runResponse.finalDocument?.trim().orEmpty()
+        val finalDocument = runCatching {
+            withHeartbeat(emitSseFrame) { requestWorkflowStream(runRequest, emitSseFrame) }
+        }.getOrElse { error ->
+            if (!workflowStreamFallbackToRun()) {
+                throw error
+            }
+            emitSseFrame(
+                "event: message\ndata: ${
+                    workflowJson.encodeToString(
+                        mapOf(
+                            "type" to "fallback",
+                            "reason" to "stream_request_failed",
+                            "message" to (error.message ?: "stream request failed")
+                        )
+                    )
+                }\n\n"
+            )
+            return requestWorkflowRunWithChunkedFallback(runRequest, emitSseFrame)
+        }
         if (finalDocument.isBlank()) {
             if (workflowStreamFallbackToRun()) {
-                return callWorkflowRunApi(runRequest)
+                emitSseFrame(
+                    "event: message\ndata: ${
+                        workflowJson.encodeToString(
+                            mapOf(
+                                "type" to "fallback",
+                                "reason" to "empty_stream_result"
+                            )
+                        )
+                    }\n\n"
+                )
+                return requestWorkflowRunWithChunkedFallback(runRequest, emitSseFrame)
             }
             throw IllegalStateException("Workflow run completed without final_document")
         }
         if (looksLikeEmptyTemplate(finalDocument)) {
             throw IllegalStateException("Workflow run returned empty template")
         }
-        val payload = workflowJson.encodeToString(
-            mapOf(
-                "final_document" to finalDocument,
-                "style_match_report" to runResponse.styleMatchReport,
-                "content_consistency_report" to runResponse.contentConsistencyReport,
-                "quality_report" to runResponse.qualityReport,
-                "run_id" to runResponse.runId
-            )
-        )
-        emitSseFrame("event: message\ndata: $payload\n\n")
         return finalDocument
+    }
+
+    private suspend fun emitContentChunks(
+        content: String,
+        emitSseFrame: suspend (String) -> Unit,
+        startingChunkIndex: Int = 0,
+        reportedChunkCount: Int? = null
+    ): Int {
+        val chunks = content.chunked(STREAM_CONTENT_CHUNK_SIZE)
+        val chunkCount = reportedChunkCount ?: chunks.size
+        chunks.forEachIndexed { index, chunk ->
+            emitSseFrame(
+                "event: content_chunk\ndata: ${
+                    workflowJson.encodeToString(
+                        GenerationStreamContentChunk(
+                            chunk = chunk,
+                            chunkIndex = startingChunkIndex + index,
+                            chunkCount = chunkCount
+                        )
+                    )
+                }\n\n"
+            )
+        }
+        return startingChunkIndex + chunks.size
+    }
+
+    private suspend fun requestWorkflowRunWithChunkedFallback(
+        runRequest: WorkflowRunRequest,
+        emitSseFrame: suspend (String) -> Unit
+    ): String {
+        val finalDocument = callWorkflowRunApi(runRequest)
+        emitContentChunks(finalDocument, emitSseFrame)
+        return finalDocument
+    }
+
+    private suspend fun requestWorkflowStream(
+        runRequest: WorkflowRunRequest,
+        emitSseFrame: suspend (String) -> Unit
+    ): String {
+        val token = workflowApiToken()
+        val requestBody = encodeWorkflowRequestCompat(runRequest)
+        val content = StringBuilder()
+        var nextChunkIndex = 0
+        httpClient.preparePost(workflowStreamUrl()) {
+            if (token.isNotBlank()) {
+                header(HttpHeaders.Authorization, "Bearer $token")
+            }
+            contentType(ContentType.Application.Json)
+            accept(ContentType.Text.EventStream)
+            setBody(TextContent(requestBody, ContentType.Application.Json))
+        }.execute { response ->
+            if (!response.status.isSuccess()) {
+                val responseBody = response.bodyAsText()
+                throw IllegalStateException(
+                    "Workflow stream API request failed (${response.status.value}): ${extractWorkflowError(responseBody)}"
+                )
+            }
+            parseEventStream(response.bodyAsChannel()) { eventName, payload ->
+                when (eventName) {
+                    "error" -> {
+                        throw IllegalStateException(extractWorkflowError(payload))
+                    }
+
+                    "content_chunk" -> {
+                        nextChunkIndex = handleUpstreamContentPayload(
+                            payload = payload,
+                            content = content,
+                            nextChunkIndex = nextChunkIndex,
+                            emitSseFrame = emitSseFrame,
+                            forwardInformationalPayload = false
+                        )
+                    }
+
+                    "message" -> {
+                        nextChunkIndex = handleUpstreamContentPayload(
+                            payload = payload,
+                            content = content,
+                            nextChunkIndex = nextChunkIndex,
+                            emitSseFrame = emitSseFrame,
+                            forwardInformationalPayload = true
+                        )
+                    }
+
+                    "done" -> {
+                        nextChunkIndex = handleUpstreamContentPayload(
+                            payload = payload,
+                            content = content,
+                            nextChunkIndex = nextChunkIndex,
+                            emitSseFrame = emitSseFrame,
+                            forwardInformationalPayload = false
+                        )
+                    }
+
+                    else -> {
+                        nextChunkIndex = handleUpstreamContentPayload(
+                            payload = payload,
+                            content = content,
+                            nextChunkIndex = nextChunkIndex,
+                            emitSseFrame = emitSseFrame,
+                            forwardInformationalPayload = true
+                        )
+                    }
+                }
+            }
+        }
+        return content.toString()
+    }
+
+    private suspend fun handleUpstreamContentPayload(
+        payload: String,
+        content: StringBuilder,
+        nextChunkIndex: Int,
+        emitSseFrame: suspend (String) -> Unit,
+        forwardInformationalPayload: Boolean
+    ): Int {
+        val explicitChunk = extractStreamChunk(payload)
+        if (!explicitChunk.isNullOrBlank()) {
+            return appendStreamChunk(
+                chunk = explicitChunk,
+                content = content,
+                nextChunkIndex = nextChunkIndex,
+                emitSseFrame = emitSseFrame
+            )
+        }
+
+        val explicitContent = extractStreamContent(payload)
+        if (!explicitContent.isNullOrBlank()) {
+            return appendStreamContentValue(
+                contentValue = explicitContent,
+                content = content,
+                nextChunkIndex = nextChunkIndex,
+                emitSseFrame = emitSseFrame
+            )
+        }
+
+        val finalDocument = extractFinalDocument(payload)
+        if (!finalDocument.isNullOrBlank()) {
+            return appendFinalDocumentDelta(
+                finalDocument = finalDocument,
+                content = content,
+                nextChunkIndex = nextChunkIndex,
+                emitSseFrame = emitSseFrame
+            )
+        }
+
+        if (forwardInformationalPayload && payload.isNotBlank()) {
+            emitSseFrame("event: message\ndata: $payload\n\n")
+        }
+        return nextChunkIndex
+    }
+
+    private suspend fun appendStreamContentValue(
+        contentValue: String,
+        content: StringBuilder,
+        nextChunkIndex: Int,
+        emitSseFrame: suspend (String) -> Unit
+    ): Int {
+        val finalDocument = extractFinalDocument(contentValue)
+        return if (!finalDocument.isNullOrBlank()) {
+            appendFinalDocumentDelta(
+                finalDocument = finalDocument,
+                content = content,
+                nextChunkIndex = nextChunkIndex,
+                emitSseFrame = emitSseFrame
+            )
+        } else {
+            appendStreamChunk(
+                chunk = contentValue,
+                content = content,
+                nextChunkIndex = nextChunkIndex,
+                emitSseFrame = emitSseFrame
+            )
+        }
+    }
+
+    private suspend fun appendStreamChunk(
+        chunk: String,
+        content: StringBuilder,
+        nextChunkIndex: Int,
+        emitSseFrame: suspend (String) -> Unit
+    ): Int {
+        if (chunk.isEmpty()) return nextChunkIndex
+        content.append(chunk)
+        return emitContentChunks(
+            content = chunk,
+            emitSseFrame = emitSseFrame,
+            startingChunkIndex = nextChunkIndex,
+            reportedChunkCount = 0
+        )
+    }
+
+    private suspend fun appendFinalDocumentDelta(
+        finalDocument: String,
+        content: StringBuilder,
+        nextChunkIndex: Int,
+        emitSseFrame: suspend (String) -> Unit
+    ): Int {
+        val existing = content.toString()
+        return when {
+            finalDocument.isEmpty() -> nextChunkIndex
+            existing.isEmpty() -> {
+                content.append(finalDocument)
+                emitContentChunks(
+                    content = finalDocument,
+                    emitSseFrame = emitSseFrame,
+                    startingChunkIndex = nextChunkIndex,
+                    reportedChunkCount = 0
+                )
+            }
+
+            finalDocument == existing -> nextChunkIndex
+
+            finalDocument.startsWith(existing) -> {
+                val delta = finalDocument.substring(existing.length)
+                content.append(delta)
+                emitContentChunks(
+                    content = delta,
+                    emitSseFrame = emitSseFrame,
+                    startingChunkIndex = nextChunkIndex,
+                    reportedChunkCount = 0
+                )
+            }
+
+            else -> {
+                LogService.warn("Workflow stream final_document snapshot does not extend accumulated content; ignoring snapshot delta")
+                nextChunkIndex
+            }
+        }
+    }
+
+    private suspend fun parseEventStream(
+        channel: ByteReadChannel,
+        onFrame: suspend (eventName: String, payload: String) -> Unit
+    ) {
+        var currentEvent = "message"
+        val dataLines = mutableListOf<String>()
+
+        while (!channel.isClosedForRead) {
+            val line = channel.readUTF8Line(STREAM_SSE_LINE_LENGTH) ?: break
+            when {
+                line.startsWith("event:") -> {
+                    currentEvent = line.removePrefix("event:").trim().ifBlank { "message" }
+                }
+
+                line.startsWith("data:") -> {
+                    dataLines += extractSseData(line)
+                }
+
+                line.isBlank() -> {
+                    if (dataLines.isNotEmpty()) {
+                        onFrame(currentEvent, dataLines.joinToString("\n"))
+                        dataLines.clear()
+                        currentEvent = "message"
+                    }
+                }
+            }
+        }
+
+        if (dataLines.isNotEmpty()) {
+            onFrame(currentEvent, dataLines.joinToString("\n"))
+        }
+    }
+
+    private fun extractSseData(line: String): String {
+        val raw = line.removePrefix("data:")
+        return if (raw.startsWith(" ")) raw.drop(1) else raw
     }
 
     private fun looksLikeEmptyTemplate(text: String): Boolean {
@@ -534,6 +881,16 @@ object GenerationService {
     private fun extractFinalDocument(payload: String): String? {
         val root = runCatching { workflowJson.parseToJsonElement(payload) }.getOrNull() ?: return null
         return findStringByKey(root, "final_document")
+    }
+
+    private fun extractStreamContent(payload: String): String? {
+        val root = runCatching { workflowJson.parseToJsonElement(payload) }.getOrNull() ?: return null
+        return findStringByKey(root, "content")
+    }
+
+    private fun extractStreamChunk(payload: String): String? {
+        val root = runCatching { workflowJson.parseToJsonElement(payload) }.getOrNull() ?: return null
+        return findStringByKey(root, "chunk")
     }
 
     private fun extractStreamMessage(payload: String): String? {

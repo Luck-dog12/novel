@@ -82,6 +82,7 @@ const server = http.createServer(async (req, res) => {
       res.setHeader('Connection', 'keep-alive');
 
       let finalDocument = '';
+      let chunkIndex = 0;
       for await (const event of stream) {
         if (event.event === WorkflowEventType.MESSAGE) {
           const content = extractEventContent(event.data);
@@ -89,15 +90,17 @@ const server = http.createServer(async (req, res) => {
             continue;
           }
           const parsedFinal = extractFinalDocument(content);
-          if (parsedFinal) {
-            finalDocument = parsedFinal;
-          } else {
-            finalDocument += content;
+          const nextDocument = parsedFinal || `${finalDocument}${content}`;
+          const delta = deriveDeltaContent(finalDocument, nextDocument);
+          finalDocument = nextDocument;
+          if (!delta) {
+            continue;
           }
-          writeSseFrame(res, 'message', {
-            content,
-            final_document: finalDocument,
+          writeSseFrame(res, 'content_chunk', {
+            chunk: delta,
+            chunk_index: chunkIndex,
           });
+          chunkIndex += 1;
           continue;
         }
 
@@ -111,7 +114,10 @@ const server = http.createServer(async (req, res) => {
       if (!finalDocument.trim()) {
         throw new Error('工作流流式响应未产出内容');
       }
-      writeSseFrame(res, 'message', { final_document: finalDocument });
+      writeSseFrame(res, 'done', {
+        chunk_count: chunkIndex,
+        content_length: finalDocument.length,
+      });
       res.end();
       return;
     }
@@ -403,21 +409,37 @@ function writeSseFrame(res, event, payload) {
   res.write(`data: ${data}\n\n`);
 }
 
+function deriveDeltaContent(previous, next) {
+  if (typeof next !== 'string' || !next) {
+    return '';
+  }
+  if (!previous) {
+    return next;
+  }
+  if (next === previous) {
+    return '';
+  }
+  if (next.startsWith(previous)) {
+    return next.slice(previous.length);
+  }
+  return '';
+}
+
 function extractFinalDocument(raw) {
   if (typeof raw !== 'string' || !raw.trim()) {
     return '';
   }
   const parsed = safeJsonParse(raw);
   if (typeof parsed === 'string') {
-    return parsed.trim();
+    return parsed;
   }
   if (isRecord(parsed)) {
     const finalDocument = findStringByKey(parsed, 'final_document');
     if (finalDocument) {
-      return finalDocument.trim();
+      return finalDocument;
     }
   }
-  return raw.trim();
+  return raw;
 }
 
 function extractEventContent(data) {
@@ -426,7 +448,7 @@ function extractEventContent(data) {
   }
   const raw = data.content;
   if (typeof raw === 'string') {
-    return raw.trim();
+    return raw;
   }
   return '';
 }

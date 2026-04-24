@@ -22,15 +22,17 @@ object GenerationRequestStore {
     private val json = Json { ignoreUnknownKeys = true }
 
     fun stage(context: Context, requestId: String, request: PendingGenerationRequest) {
-        writeRequest(requestDirectory(context), requestId, request)
+        writeRequest(primaryRequestDirectory(context), requestId, request)
     }
 
     fun load(context: Context, requestId: String): PendingGenerationRequest? {
-        return readRequest(requestDirectory(context), requestId)
+        return readRequest(primaryRequestDirectory(context), requestId)
+            ?: readRequest(legacyRequestDirectory(context), requestId)
     }
 
     fun delete(context: Context, requestId: String) {
-        deleteRequest(requestDirectory(context), requestId)
+        deleteRequest(primaryRequestDirectory(context), requestId)
+        deleteRequest(legacyRequestDirectory(context), requestId)
     }
 
     internal fun writeRequest(directory: File, requestId: String, request: PendingGenerationRequest) {
@@ -52,9 +54,9 @@ object GenerationRequestStore {
         requestFile(directory, requestId).delete()
     }
 
-    private fun requestDirectory(context: Context): File {
-        return File(context.cacheDir, REQUEST_DIR)
-    }
+    private fun primaryRequestDirectory(context: Context): File = File(context.filesDir, REQUEST_DIR)
+
+    private fun legacyRequestDirectory(context: Context): File = File(context.cacheDir, REQUEST_DIR)
 
     private fun requestFile(directory: File, requestId: String): File {
         return File(directory, "$requestId.json")

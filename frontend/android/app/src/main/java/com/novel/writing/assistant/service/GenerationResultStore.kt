@@ -19,6 +19,10 @@ object GenerationResultStore {
         return relativePath
     }
 
+    fun load(context: Context, generationId: String): GenerationResponse? {
+        return readResult(resultDirectory(context), generationId)
+    }
+
     internal fun writeResult(directory: File, response: GenerationResponse) {
         directory.mkdirs()
         File(directory, "${response.id}.json").writeText(json.encodeToString(response), Charsets.UTF_8)
@@ -35,4 +39,6 @@ object GenerationResultStore {
     }
 
     private fun relativePath(generationId: String): String = "$RESULT_DIR/$generationId.json"
+
+    private fun resultDirectory(context: Context): File = File(context.filesDir, RESULT_DIR)
 }

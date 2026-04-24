@@ -15,13 +15,11 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import java.util.Date
-import java.util.UUID
 
 class ApiService {
     companion object {
-        // Streaming responses may contain full novel content in a single SSE data line.
-        internal const val MAX_SSE_LINE_LENGTH = 4 * 1024 * 1024
+        // The backend may flush an entire chapter or final document in one SSE line.
+        internal const val MAX_SSE_LINE_LENGTH = 16 * 1024 * 1024
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -31,6 +29,23 @@ class ApiService {
         val data: String,
         val partialOutput: String? = null,
         val errorMessage: String? = null
+    )
+
+    @Serializable
+    data class GenerationStreamResultMeta(
+        val id: String,
+        val projectId: String,
+        val sessionId: String,
+        val generationType: String,
+        val generationDate: String,
+        val duration: Long
+    )
+
+    @Serializable
+    data class GenerationStreamContentChunk(
+        val chunk: String,
+        val chunkIndex: Int,
+        val chunkCount: Int
     )
 
     suspend fun generateContent(projectId: String, isContinueWriting: Boolean, referenceFileId: String?, 
@@ -71,7 +86,7 @@ class ApiService {
     ): GenerationResponse {
         return withContext(Dispatchers.IO) {
             val baseUrl = ApiClient.getBaseUrl()
-            val response = ApiClient.client.post("$baseUrl/v1/generation/stream") {
+            val response = ApiClient.streamingClient.post("$baseUrl/v1/generation/stream") {
                 contentType(ContentType.Application.Json)
                 accept(ContentType.Text.EventStream)
                 setBody(
@@ -93,11 +108,22 @@ class ApiService {
             val channel = response.bodyAsChannel()
             var finalResponse: GenerationResponse? = null
             var latestPartialOutput: String? = null
+            var latestResultMeta: GenerationStreamResultMeta? = null
+            var streamFailure: Exception? = null
 
             suspend fun handleFrame(eventName: String, payload: String) {
-                val partial = extractFinalDocument(payload)
-                if (!partial.isNullOrBlank()) {
-                    latestPartialOutput = partial
+                val chunk = if (eventName == "content_chunk") extractContentChunk(payload) else null
+                val partial = when {
+                    !chunk.isNullOrBlank() -> {
+                        latestPartialOutput = (latestPartialOutput ?: "") + chunk
+                        latestPartialOutput
+                    }
+
+                    else -> extractFinalDocument(payload)?.also {
+                        if (it.isNotBlank()) {
+                            latestPartialOutput = it
+                        }
+                    }
                 }
                 val error = if (eventName == "error") extractErrorMessage(payload) else null
                 onEvent(
@@ -108,8 +134,16 @@ class ApiService {
                         errorMessage = error
                     )
                 )
-                if (eventName == "done") {
-                    finalResponse = json.decodeFromString<GenerationResponse>(payload)
+                when (eventName) {
+                    "done" -> {
+                        finalResponse = runCatching {
+                            json.decodeFromString<GenerationResponse>(payload)
+                        }.getOrNull()
+                    }
+
+                    "result_meta" -> {
+                        latestResultMeta = json.decodeFromString<GenerationStreamResultMeta>(payload)
+                    }
                 }
             }
 
@@ -117,19 +151,24 @@ class ApiService {
                 parseEventStream(channel) { eventName, payload ->
                     handleFrame(eventName, payload)
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                streamFailure = e
             }
             finalResponse
-                ?: if (!latestPartialOutput.isNullOrBlank() && isContinueWriting && !sessionId.isNullOrBlank()) {
+                ?: latestResultMeta?.takeIf { !latestPartialOutput.isNullOrBlank() }?.let { meta ->
                     GenerationResponse(
-                        id = UUID.randomUUID().toString(),
-                        projectId = projectId,
-                        sessionId = sessionId,
-                        generationType = "continuation",
+                        id = meta.id,
+                        projectId = meta.projectId,
+                        sessionId = meta.sessionId,
+                        generationType = meta.generationType,
                         outputContent = latestPartialOutput!!,
-                        generationDate = Date().toString(),
-                        duration = 0
+                        generationDate = meta.generationDate,
+                        duration = meta.duration
                     )
+                }
+                ?: if (!latestPartialOutput.isNullOrBlank()) {
+                    val reason = streamFailure?.message?.let { ": $it" }.orEmpty()
+                    throw IllegalStateException("Stream result content arrived without final result metadata$reason")
                 } else {
                     generateContent(
                         projectId = projectId,
@@ -345,6 +384,11 @@ class ApiService {
         val element = runCatching { json.parseToJsonElement(payload) }.getOrNull() ?: return null
         return findStringByKey(element, "final_document")
             ?: findStringByKey(element, "content")
+    }
+
+    private fun extractContentChunk(payload: String): String? {
+        val element = runCatching { json.parseToJsonElement(payload) }.getOrNull() ?: return null
+        return findStringByKey(element, "chunk")
     }
 
     private fun extractSseData(line: String): String {

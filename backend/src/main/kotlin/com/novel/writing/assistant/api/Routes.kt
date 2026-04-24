@@ -20,6 +20,7 @@ import com.novel.writing.assistant.service.ConfigService
 import com.novel.writing.assistant.service.DocumentService
 import com.novel.writing.assistant.service.GenerationReceiptService
 import com.novel.writing.assistant.service.GenerationService
+import com.novel.writing.assistant.service.GenerationStreamResultMeta
 import com.novel.writing.assistant.service.HistoryService
 import com.novel.writing.assistant.service.MissingSessionIdException
 import com.novel.writing.assistant.service.NoContextException
@@ -147,7 +148,20 @@ fun Application.configureRouting() {
                                     write(frame)
                                     flush()
                                 }
-                                write("event: done\ndata: ${Json.encodeToString(response)}\n\n")
+                                write(
+                                    "event: done\ndata: ${
+                                        Json.encodeToString(
+                                            GenerationStreamResultMeta(
+                                                id = response.id,
+                                                projectId = response.projectId,
+                                                sessionId = response.sessionId,
+                                                generationType = response.generationType,
+                                                generationDate = response.generationDate,
+                                                duration = response.duration
+                                            )
+                                        )
+                                    }\n\n"
+                                )
                                 flush()
                             } catch (e: MissingSessionIdException) {
                                 write("event: error\ndata: ${Json.encodeToString(mapOf("message" to (e.message ?: "Missing sessionId")))}\n\n")
